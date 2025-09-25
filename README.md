@@ -1,9 +1,7 @@
 # URD_APP
 
-O **URD_APP** é uma aplicação em desenvolvimento voltada para operações de telemetria, testes estáticos e análise de voos.  
-Atualmente, encontra-se em sua **versão inicial**, ainda com alguns bugs conhecidos e funcionalidades em evolução.  
-
-O objetivo principal do projeto é integrar diferentes módulos de **Ground Station (GS)** e **análise de dados**, oferecendo uma interface unificada e intuitiva.
+O **URD_APP** é uma aplicação em desenvolvimento pelo Departamento de Sistemas Embarcados, voltada para oferecer uma interface integrada que facilite as operações de telemetria de voo, testes estáticos, análise de dados e simulações.
+Atualmente, encontra-se em sua **versão inicial**, com diversas funcionalidades em fase de aprimoramento.  
 
 ---
 
@@ -11,7 +9,7 @@ O objetivo principal do projeto é integrar diferentes módulos de **Ground Stat
 
 ### 🔹 GS Flight (Single)
 Interface principal de voo em tempo real.  
-- Recebe telemetria completa e exibe **gráficos de altitude, pressão e empuxo**.  
+- Recebe telemetria completa e exibe **gráficos de altitude, coordenadas e informações importantes**.  
 - Mostra a **orientação 3D do foguete** em tempo real.  
 - Exibe **mapas online e offline** com as coordenadas do foguete.  
 - Inclui terminal de comunicação para monitoramento das mensagens enviadas e recebidas.  
@@ -27,15 +25,15 @@ Versão expandida da GS para monitorar **dois voos em paralelo**.
 ---
 
 ### 🔹 GS Static Test
-Ground Station para análise em tempo real dos **testes estáticos de motores**.  
+Ground Station para análise em tempo real dos **testes estáticos**.  
 - Exibe telemetria de **empuxo e pressão em tempo real**.  
-- Inclui **botões de ignição** e de **teste de comunicação**.  
+- Inclui **botões de ignição** e de **teste de ping (comunicação)**.  
 - Todos os dados recebidos são **salvos em arquivos de log**.  
 
 ---
 
 ### 🔹 Data Analysis
-Ferramenta para **análise pós-coleta de dados**.  
+Ferramenta para **análise de dados**.  
 - Funciona tanto para análises de **voos** quanto de **testes estáticos**.  
 - Permite carregar arquivos de log e gerar gráficos de desempenho.  
 - Atualmente faltam diversas funcionalidades, incluindo a **exportação de dados**.  
@@ -43,22 +41,23 @@ Ferramenta para **análise pós-coleta de dados**.
 ---
 
 ### 🔹 Simulator
-Módulo de simulação de telemetria.  
-- Permite simular dentro do microcontrolador um voo real do foguete **Arace**.  
-- Útil para testar o aplicativo sem hardware conectado.  
+Módulo de simulação de voo.  
+- Permite simular dentro do microcontrolador um voo real sem sair do chão, com os dados de voo do **Arace** na IREC 2025.  
 - Depende de uma biblioteca ainda não lançada, logo **não está 100% utilizável**.  
 
 ---
 
 ### 🔹 Map Manager
-Gerenciador de mapas offline.  
-- Permite **baixar mapas** para utilização na **GS Flight** em cenários sem internet.  
+Gerenciador de mapas online.  
+- Permite **baixar mapas** para utilização na **GS Flight**.
+- Funciona apenas online e necessita de alguns ajustes ainda.  
 
 ---
 
 ## ⚠️ Status Atual
 - Esta versão inicial está em **fase de testes**.  
-- Algumas funcionalidades podem apresentar erros ou comportamento inesperado.  
+- Algumas funcionalidades podem apresentar erros ou comportamento inesperado. 
+- Faltam vários ajustes ainda em algumas funcionalidades. 
 - Feedbacks e contribuições são bem-vindos!  
 
 ---
@@ -67,14 +66,17 @@ Gerenciador de mapas offline.
 - Finalizar a **GS Dual**.  
 - Melhorar estabilidade e desempenho geral.  
 - Adicionar funcionalidades ao módulo de **Data Analysis**.  
-- Refinar a interface gráfica e navegação.  
+- Refinar o modulo **GS Flight**.  
+- Ajustar o modulo **Map Manager**.
+- Finalizar o modulo **Simulator**.
+
 
 ---
 
 ## 📂 Estrutura do Projeto
 
 Abaixo está a estrutura principal do código-fonte do **URD_APP**:
-
+```bash
 URD_APP/
 ├── .venv/ # Ambiente virtual Python
 ├── build/ # Arquivos de build
@@ -98,27 +100,51 @@ URD_APP/
          ├── rocket_3d.py # Renderização 3D do foguete
          ├── simulator.py # Módulo de simulação
          └── three.min.js # Biblioteca JS (Three.js) usada no 3D
-
+```
 ---
 
 ## ⚙️ Comandos Úteis
 
 ### 🔹 Ativar ambiente virtual
-- **Windows (PowerShell):**
+- **Windows (PowerShell):** 
+```powershell
 .\.venv\Scripts\Activate.ps1
-Caso de erro, enviar esse comando antes:
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
 
-Para desativar o ambiente virtual:
+> ⚠️ Caso dê erro de execução, rode antes:
+> ```powershell
+> Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+> ```
+
+
+### 🔹 Desativar ambiente virtual
+- **Windows (PowerShell):**
+```powershell
 deactivate
+```
 
-Instala todas as bibliotecas necessárias listadas no requirements.txt:
+### 🔹 Instala todas as bibliotecas necessárias listadas no requirements.txt:
+- **Windows (PowerShell):**
+```powershell
 pip install -r requirements.txt
+```
 
-Executa o aplicativo principal em modo desenvolvimento:
+### 🔹 Executa o aplicativo principal em modo desenvolvimento:
+- **Windows (PowerShell):**
+```powershell
 python main.py
+```
 
-Cria um .exe com a biblioteca pyinstaller (Windows):
+### 🔹 Cria um .exe com a biblioteca pyinstaller (Windows):
+- **Windows (PowerShell):**
+```powershell
 pyinstaller --onefile --windowed --name URD_APP --icon=logo.ico --add-data "logo.png;." --add-data "views;views" main.py
+```
+
+
+
+
+
+
 
 
