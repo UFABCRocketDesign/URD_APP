@@ -276,7 +276,7 @@ class MapsManagerPage(QWidget):
         lat_max, lon_max = bounds["latMax"], bounds["lonMax"]
 
         # Expande 5 km em cada direção
-        lat_min, lon_min, lat_max, lon_max = expand_bounds(lat_min, lon_min, lat_max, lon_max, extra_km=5)
+        lat_min, lon_min, lat_max, lon_max = expand_bounds(lat_min, lon_min, lat_max, lon_max, extra_km=8)
 
 
         # barra de progresso

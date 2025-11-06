@@ -1,4 +1,4 @@
-import os
+import os, math
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
@@ -122,13 +122,58 @@ class Rocket3DView(QWidget):
 
 
         // API para Python
-        function updateRocket(qw,qx,qy,qz){{
-            if(!rocket) return;
-            var q = new THREE.Quaternion(qx,qy,qz,qw);
-            rocket.setRotationFromQuaternion(q);
-        }}
-        window.updateRocket = updateRocket;
+        //function updateRocket(qw,qx,qy,qz){{
+        //    if(!rocket) return;
+        //    var q = new THREE.Quaternion(qx,qy,qz,qw);
+        //    rocket.setRotationFromQuaternion(q);
+        //}}
+        //window.updateRocket = updateRocket;
 
+        // API para Python (agora recebe ângulos de Euler em radianos)
+        function updateRocket(roll, pitch, yaw) {{
+            if (!rocket) return;
+
+
+            rocket.rotation.set(roll, pitch, yaw, 'ZYX');
+        }}
+
+        window.updateRocket = updateRocket;
+        // --- CRIA O EIXO VISUAL ---
+        const axesHelper = new THREE.AxesHelper(1); // tamanho 5
+        scene.add(axesHelper);
+
+        // --- FUNÇÃO PRA CRIAR TEXTO 2D ---
+        function makeTextSprite(message, color = "#ffffff", fontSize = 100) {{
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        context.font = `${{fontSize}}px Arial`;
+        const textWidth = context.measureText(message).width;
+        canvas.width = textWidth;
+        canvas.height = fontSize * 1.2;
+        context.font = `${{fontSize}}px Arial`;
+        context.fillStyle = color;
+        context.fillText(message, 0, fontSize);
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        const spriteMaterial = new THREE.SpriteMaterial({{ map: texture }});
+        const sprite = new THREE.Sprite(spriteMaterial);
+        sprite.scale.set(0.5, 0.25, 1); // ajuste de tamanho
+        return sprite;
+        }}
+
+        // --- ADICIONA OS RÓTULOS ---
+        const labelX = makeTextSprite("X", "#ff0000");
+        labelX.position.set(1.5, 0, 0);
+
+        const labelY = makeTextSprite("Y", "#00ff00");
+        labelY.position.set(0, 1.5, 0);
+
+        const labelZ = makeTextSprite("Z", "#0000ff");
+        labelZ.position.set(0, 0, 1.5);
+
+        scene.add(labelX);
+        scene.add(labelY);
+        scene.add(labelZ);
         // Resize
         window.addEventListener('resize', function(){{
             camera.aspect = window.innerWidth / window.innerHeight;
@@ -141,8 +186,26 @@ class Rocket3DView(QWidget):
         """
         self.web.setHtml(html)
 
-    def set_orientation(self, qw: float, qx: float, qy: float, qz: float):
-        js = f"if (typeof updateRocket !== 'undefined') updateRocket({qw},{qx},{qy},{qz});"
+    # def set_orientation(self, qw: float, qx: float, qy: float, qz: float):
+    #     js = f"if (typeof updateRocket !== 'undefined') updateRocket({qw},{qx},{qy},{qz});"
+    #     self.web.page().runJavaScript(js)
+
+
+    def set_orientation(self, roll: float, pitch: float, yaw: float, degrees: bool = False):
+        """
+        Atualiza a orientação do foguete no visualizador 3D.
+        Agora envia ângulos de Euler (roll, pitch, yaw) em radianos para o JS.
+        Se degrees=True, converte de graus para radianos antes de enviar.
+        """
+        if degrees:
+            roll = math.radians(roll)
+            pitch = math.radians(pitch)
+            yaw = math.radians(yaw)
+
+        js = (
+            f"if (typeof updateRocket !== 'undefined') "
+            f"updateRocket({roll}, {pitch}, {yaw});"
+        )
         self.web.page().runJavaScript(js)
 
     def pause(self):

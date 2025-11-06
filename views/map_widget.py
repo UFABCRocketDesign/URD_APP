@@ -133,7 +133,7 @@ class MapWidget(QWebEngineView):
         <body>
             <div id="map"></div>
             <script>
-                var map = L.map('map').setView([{lat_c}, {lon_c}], 0);
+                var map = L.map('map').setView([{lat_c}, {lon_c}], 2);
                 {tile_layer}
 
 

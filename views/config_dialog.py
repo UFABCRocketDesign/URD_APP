@@ -5,6 +5,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QDoubleValidator
 
+import time
+
 class ConfigDialog(QDialog):
     def __init__(self, gs_single, test_password: str = "urd123", parent=None):
         super().__init__(parent)
@@ -48,7 +50,7 @@ class ConfigDialog(QDialog):
         for i in range(4):
             row = QHBoxLayout()
             row.addWidget(self.pq_enabled[i])
-            row.addWidget(QLabel("t (s):"))
+            row.addWidget(QLabel("h (m):"))
             row.addWidget(self.pq_time[i])
             lay_test.addLayout(row, 4+i, 0, 1, 2)
 
@@ -65,7 +67,7 @@ class ConfigDialog(QDialog):
         root.addWidget(box_test)
 
         # --- Base ---
-        box_base = QGroupBox("Base (para cálculo de distância)")
+        box_base = QGroupBox("Base (para cálculo de distância, use ',' como separador)")
         lay_base = QGridLayout(box_base)
 
         # Latitude: -90 a 90, 6 casas decimais
@@ -136,12 +138,17 @@ class ConfigDialog(QDialog):
     def _apply_to_gs(self):
         if not self._test_unlocked:
             return
+
         self.gs_single.set_position(self.lat.value(), self.lon.value())
         self.gs_single.inject_altitude(self.alt.value())
         self.gs_single.alt_max = self.alt.value()
         self.gs_single.lbl_alt_max.setText(f"{self.alt.value():.2f}")
-        for i in range(4):
-            self.gs_single.set_parachute_state(i, self.pq_enabled[i].isChecked(), self.pq_time[i].value())
+
+        # Atualiza manualmente os 4 paraquedas
+        self.gs_single._set_pq(0, self.pq_time[0].value() if self.pq_enabled[0].isChecked() else 0.0)
+        self.gs_single._set_pq(1, self.pq_time[1].value() if self.pq_enabled[1].isChecked() else 0.0)
+        self.gs_single._set_pq(2, self.pq_time[2].value() if self.pq_enabled[2].isChecked() else 0.0)
+        self.gs_single._set_pq(3, self.pq_time[3].value() if self.pq_enabled[3].isChecked() else 0.0)
 
     def _set_base(self):
         lat = float(self.base_lat.text()) if self.base_lat.text() else 0.0
@@ -181,6 +188,32 @@ class ConfigDialog(QDialog):
 
 
     def _use_my_location(self):
+        # if self.gs_single.connected_ok:
+        #     self.gs_single.ser.write(b"GPS_COORDS\n")
+        #     self.gs_single.time.sleep(5)
+        #     line = self.gs_single.ser.readline().decode(errors="ignore").strip()
+        #     if line.startswith("GPS_OK\n"):
+        #         try:
+        #             line = self.gs_single.ser.readline().decode(errors="ignore").strip()
+        #             print(line)
+        #             _, lat_str, lon_str = line.split("\t")
+        #             lat = float(lat_str)
+        #             lon = float(lon_str)
+        #             if lat and lon:
+        #                 self.base_lat.setText(f"{lat: .6f}")
+        #                 self.base_lon.setText(f"{lon: .6f}")
+        #                 self.gs_single.set_home_location(lat, lon)
+        #                 self.gs_single.map.set_base(lat, lon)
+        #                 QMessageBox.information(self, "Localização obtida do GPS", f"Lat: {lat:.6f}, Lon: {lon:.6f}")
+        #                 return
+        #             else:
+        #                 QMessageBox.warning(self, "Erro", f"Coordenadas inválidas ou nulas recebidas do GPS.")
+        #                 return
+
+        #         except Exception as e:
+        #             QMessageBox.warning(self, "Erro", f"Não foi possível interpretar os dados do GPS: {e}")
+        #             return
+        #     else:
         try:
             import geocoder, requests
             g = geocoder.ip('me')
@@ -210,13 +243,25 @@ class ConfigDialog(QDialog):
     def _load_from_gs(self):
         if hasattr(self.gs_single, "last_latlon") and self.gs_single.last_latlon:
             lat, lon = self.gs_single.last_latlon
-            self.lat.setValue(lat); self.lon.setValue(lon)
+            self.lat.setValue(lat)
+            self.lon.setValue(lon)
+
         if getattr(self.gs_single, "alt_max", None) not in (None, float("-inf")):
             self.alt.setValue(self.gs_single.alt_max)
-        for i in range(4):
-            txt = self.gs_single.pq_time_labels[i].text()
-            t_val = float(txt.replace("t=", "").replace("s", "").strip()) if "t=" in txt else 0.0
-            active = "background: #c8f7c5" in self.gs_single.pq_boxes[i].styleSheet()
+
+        # Novo mapeamento entre índice e caixa de paraquedas
+        pq_refs = [
+            self.gs_single.pqd_drogueN,
+            self.gs_single.pqd_drogueB,
+            self.gs_single.pqd_mainN,
+            self.gs_single.pqd_mainB,
+        ]
+
+        for i, box in enumerate(pq_refs):
+            # Detecta se a caixa está verde (ativa)
+            active = "background: #b6f5b6" in box.styleSheet()
             self.pq_enabled[i].setChecked(active)
-            self.pq_time[i].setValue(t_val)
+
+            # Como não há mais label de tempo, define o spin como 0
+            self.pq_time[i].setValue(0.0)
 

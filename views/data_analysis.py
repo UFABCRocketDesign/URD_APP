@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QFileDialog, QLabel,
-    QGridLayout, QGroupBox, QCheckBox, QMessageBox, QHBoxLayout, QScrollArea, QToolTip, 
-    QDialog, QFormLayout, QDialogButtonBox, QLineEdit, QInputDialog
+    QGridLayout, QGroupBox, QCheckBox, QMessageBox, QHBoxLayout,
+    QDialog, QFormLayout, QDialogButtonBox, QLineEdit, QInputDialog, QComboBox
 )
 from PySide6.QtGui import (QCursor)
 
@@ -306,7 +306,26 @@ COLOR_MAP = {
 class StaticAnalysisPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+
+        self._show_selection_dialog() 
+        self.unit_thrust = self.sel["unit_force"]
+        self.unit_press = self.sel["unit_pressure"]
+        self.enable_thrust = self.sel["use_force"]
+        self.enable_press = self.sel["use_pressure"]
+
+    
         self._build_ui()
+
+    def _show_selection_dialog(self):
+        dlg = DataSelectionDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.sel = dlg.result_config()  # dict com flags e unidades
+        else:
+            # se cancelar, define um padrão seguro
+            self.sel = {
+                "use_force": True, "use_pressure": True,
+                "unit_force": "kgf", "unit_pressure": "psi",
+            }
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -316,18 +335,58 @@ class StaticAnalysisPage(QWidget):
         self.btn_open.clicked.connect(self.load_file)
         root.addWidget(self.btn_open)
 
-        # Resumo
-        self.data_box = QGroupBox("Resumo do Teste Estático")
-        self.grid = QGridLayout(self.data_box)
-        root.addWidget(self.data_box)
+        # Container para resumo + gráfico (se ainda não tem)
+        self.analysis_area = QWidget()
+        analysis_layout = QVBoxLayout(self.analysis_area)
+        root.addWidget(self.analysis_area, stretch=2)
 
-        # Gráfico
-        self.plot = pg.PlotWidget(title="Análise do Teste Estático")
-        self.plot.addLegend()
+        # --- Linha de resumo em 4 colunas ---
+        self.summary_row = QHBoxLayout()
+        analysis_layout.addLayout(self.summary_row)
+
+        # Coluna 1: Tempo
+        self.box_time = QGroupBox("Tempo")
+        self.box_time_lay = QVBoxLayout(self.box_time)
+        self.lbl_t_total = QLabel("Tempo Total: —")
+        self.box_time_lay.addWidget(self.lbl_t_total)
+        self.summary_row.addWidget(self.box_time)
+
+        # Coluna 2: Empuxo
+        self.box_force = QGroupBox("Empuxo")
+        self.box_force_lay = QVBoxLayout(self.box_force)
+        self.lbl_f_max = QLabel("Máx. Empuxo: —")
+        self.lbl_burn = QLabel("Tempo de Queima: —")
+        self.lbl_impulse = QLabel("Impulso Total: —")
+        self.lbl_empuxo_adcraw = QLabel("Máx. ADC raw: —")
+        self.lbl_empuxo_adcavg = QLabel("Máx. ADC filtrado: —")
+        self.box_force_lay.addWidget(self.lbl_f_max)
+        self.box_force_lay.addWidget(self.lbl_burn)
+        self.box_force_lay.addWidget(self.lbl_impulse)
+        self.box_force_lay.addWidget(self.lbl_empuxo_adcraw)
+        self.box_force_lay.addWidget(self.lbl_empuxo_adcavg)
+        self.summary_row.addWidget(self.box_force)
+
+        # Coluna 3: Pressão
+        self.box_press = QGroupBox("Pressão")
+        self.box_press_lay = QVBoxLayout(self.box_press)
+        self.lbl_p_max = QLabel("Máx. Pressão: —")
+        self.lbl_p_duration = QLabel("Tempo de duração: —")
+        self.lbl_press_adcraw = QLabel("Máx. ADC raw: —")
+        self.lbl_press_adcavg = QLabel("Máx. ADC filtrado: —")
+        self.box_press_lay.addWidget(self.lbl_p_max)
+        self.box_press_lay.addWidget(self.lbl_p_duration)
+        self.box_press_lay.addWidget(self.lbl_press_adcraw)
+        self.box_press_lay.addWidget(self.lbl_press_adcavg)
+        self.summary_row.addWidget(self.box_press)
+
+        # --- Gráfico ---
+        self.plot = pg.PlotWidget(title="Análise dos Dados")
+        self.legend = self.plot.addLegend()   # cria só aqui
         self.plot.showGrid(x=True, y=True)
-        root.addWidget(self.plot, stretch=1)
+        analysis_layout.addWidget(self.plot, stretch=2)
 
-        # Label do cursor
+
+        # label do cursor (opcional)
         self.label_hover = QLabel("Cursor: -")
         root.addWidget(self.label_hover)
 
@@ -353,6 +412,10 @@ class StaticAnalysisPage(QWidget):
 
         self.curves = {}
         self.df = None
+
+        self.box_force.setVisible(self.enable_thrust)
+        self.box_press.setVisible(self.enable_press)
+
 
     def cut_data(self):
         if self.df is None:
@@ -418,7 +481,8 @@ class StaticAnalysisPage(QWidget):
 
         # ---- Pressão ----
         layout.addRow(QLabel("<b>Pressão</b>"))
-        adc_i_tdt_edit = QLineEdit(); layout.addRow("ADC inicial transdutor (0 psi):", adc_i_tdt_edit)
+        adc_i_tdt_edit = QLineEdit(); layout.addRow("ADC inicial transdutor:", adc_i_tdt_edit)
+        psi_i_tdt_edit = QLineEdit(); layout.addRow("Pressão inicial transdutor:", psi_i_tdt_edit)
         adc_45v_edit = QLineEdit(); layout.addRow("ADC equivalente a 4.5V:", adc_45v_edit)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -435,6 +499,7 @@ class StaticAnalysisPage(QWidget):
             peso_f_cell = float(peso_f_cell_edit.text() or 0)
 
             adc_i_tdt = float(adc_i_tdt_edit.text() or 0)
+            psi_i_tdt = float(psi_i_tdt_edit.text() or 0)
             adc_45v = float(adc_45v_edit.text() or 0)
         except ValueError:
             QMessageBox.critical(self, "Erro", "Valores inválidos.")
@@ -451,8 +516,8 @@ class StaticAnalysisPage(QWidget):
         # ---- Calibração Pressão ----
         if adc_i_tdt != 0 and adc_45v != 0 and adc_45v > adc_i_tdt:
             m_tdt = 500 / (adc_45v - adc_i_tdt)
-            psi_values = (df_calib["adc.avg.tdt"] - adc_i_tdt) * m_tdt
-            psi_values = psi_values.clip(lower=0, upper=500)  # força limite
+            psi_values = (df_calib["adc.avg.tdt"] - adc_i_tdt) * m_tdt + psi_i_tdt
+            # psi_values = psi_values.clip(lower=0, upper=500)  # força limite
             df_calib["psi.calibrado"] = psi_values
             df_calib["Pa.calibrado"] = df_calib["psi.calibrado"] * 6894.76
             df_calib["atm.calibrado"] = df_calib["psi.calibrado"] / 14.696
@@ -476,19 +541,20 @@ class StaticAnalysisPage(QWidget):
 
 
     def save_screenshot(self):
-        # Captura toda a página (StaticAnalysisPage)
-        pixmap = self.grab()
+        # captura apenas o container resumo + gráfico
+        pixmap = self.analysis_area.grab()
 
-        # Caixa de diálogo para salvar
         path, _ = QFileDialog.getSaveFileName(
-            self, "Salvar análise como imagem", "", "PNG Image (*.png)"
+            self,
+            "Salvar análise",
+            "",
+            "PNG Image (*.png)"
         )
         if not path:
             return
         if not path.endswith(".png"):
             path += ".png"
 
-        # Salva em PNG
         pixmap.save(path, "PNG")
         QMessageBox.information(self, "Sucesso", f"Imagem salva em:\n{path}")
 
@@ -500,9 +566,13 @@ class StaticAnalysisPage(QWidget):
 
         try:
             df = pd.read_csv(path, sep="\t")
+
             if not df.columns.str.contains("tempo.s").any():
                 # tenta de novo pulando a primeira linha
                 df = pd.read_csv(path, sep="\t", skiprows=1)
+
+            df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
+            
         except Exception as e:
             QMessageBox.critical(self, "Erro", "Arquivo inválido: coluna 'tempo.s' não encontrada.\n {e}")
             return
@@ -516,141 +586,225 @@ class StaticAnalysisPage(QWidget):
 
     def analyze_data(self):
         df = self.df
+        t = df["tempo.s"].to_numpy()
 
-        # garante que tempo seja numérico
-        t = pd.to_numeric(df["tempo.s"], errors="coerce")
-
-        # Se existir calibrado, usa ele, senão usa o normal
-        if "Kgf.calibrado" in df:
-            thrust = df["Kgf.calibrado"]
-        elif "Kgf.avg.cell" in df:
-            thrust = df["Kgf.avg.cell"]
-        else:
-            thrust = None
-
-        if "psi.calibrado" in df:
-            press = df["psi.calibrado"]
-        elif "psi.avg.tdt" in df:
-            press = df["psi.avg.tdt"]
-        else:
-            press = None
-
-        max_thrust = thrust.max() if thrust is not None else 0
-        max_press = press.max() if press is not None else 0
-
-        # tempo total: diferença entre último e primeiro tempo válidos
-        t_valid = t.dropna()
-        t_total = t_valid.iloc[-1] - t_valid.iloc[0] if not t_valid.empty else 0
-
-        burn_time = 0
-        if thrust is not None and not thrust.dropna().empty:
-            peak = thrust.max(skipna=True)
-            threshold = 0.05 * peak
-
-            # índices onde o empuxo > 10% do pico
-            valid_idx = np.where(thrust.to_numpy() > threshold)[0]
-
-            if len(valid_idx) > 0:
-                start = valid_idx[0]   # início da queima
-                end = valid_idx[-1]    # fim da queima
-                burn_time = t.iloc[end] - t.iloc[start]
-
-                # desenha linhas verticais no gráfico
-                line_start = pg.InfiniteLine(
-                    pos=t.iloc[start], angle=90,
-                    pen=pg.mkPen('g', width=2, style=Qt.DashLine)
-                )
-                line_end = pg.InfiniteLine(
-                    pos=t.iloc[end], angle=90,
-                    pen=pg.mkPen('r', width=2, style=Qt.DashLine)
-                )
-
-            else:
-                burn_time = 0
-
-
-
-        # preencher resumo
-        self.clear_layout(self.grid)
-        stats = {
-            "Máx. Empuxo (kgf)": max_thrust,
-            "Máx. Pressão (psi)": max_press,
-            "Tempo Total (s)": t_total,
-            "Tempo Queima (s)": burn_time,
-        }
-        row = 0
-        for k, v in stats.items():
-            box = QGroupBox(k)
-            lay = QVBoxLayout(box)
-            lay.addWidget(QLabel(f"{v:.2f}"))
-            self.grid.addWidget(box, row // 2, row % 2)
-            row += 1
-
-        # plota curvas permitidas
+        # Limpa o gráfico
         self.plot.clear()
-        self.plot.addLegend()
-        self.curves.clear()
-        self.plot.addItem(line_start)
-        self.plot.addItem(line_end)
-
-        allowed_cols = [
-            "adc.raw.cell", "adc.avg.cell",
-            "adc.raw.tdt", "adc.avg.tdt",
-            "Kgf.avg.cell", "psi.avg.tdt",
-            "Kgf.calibrado", "psi.calibrado"
-        ]
-
-        COLOR_MAP = {
-            # --- Célula de carga ---
-            "adc.raw.cell": "g",
-            "adc.avg.cell": "m",
-            "Kgf.avg.cell": "b",
-            "Kgf.calibrado": "navy",
-
-            # --- Transdutor ---
-            "adc.raw.tdt": "y",
-            "adc.avg.tdt": "orange",
-            "psi.avg.tdt": "r",
-            "psi.calibrado": "purple",
-        }
+        self.legend.clear()
 
 
-        for col, color in COLOR_MAP.items():
-            if col not in df.columns:
-                continue
-
-            # # Linha
-            # line = self.plot.plot(
-            #     t, df[col],
-            #     pen=pg.mkPen(color=color, width=2),
-            #     name=col  # <- entra na legenda apenas uma vez
-            # )
-
-            # Bolinhas (sem adicionar na legenda)
-            # scatter = pg.ScatterPlotItem(
-            #     x=t, y=df[col],
-            #     brush=pg.mkBrush(color),
-            #     size=5,
-            #     pen=pg.mkPen(color),
-            #     name=None  # não aparece na legenda
-            # )
-            # self.plot.addItem(scatter)
-
-            curve = self.plot.plot(
-                t, df[col],
-                pen=pg.mkPen(color=color, width=2),  # linha
-                symbol='o',                          # bolinhas
-                symbolSize=5,
-                symbolBrush=color,
-                name=col  # aparece na legenda apenas 1 vez
-            )
-
-            self.curves[col] = curve
-
-            # # guarda referência
-            # self.curves[col] = (line, scatter)
+        # Ajusta os rótulos e eixos
+        self.plot.setLabel("bottom", "Tempo", "s")
+        self.plot.setLabel("right", "Pressão", self.unit_press)
+        self.plot.setLabel("left", "Empuxo", self.unit_thrust)
+        self.plot.showAxis("left")
+        self.plot.showAxis("right")
 
 
+        # cria eixo da esquerda (empuxo)
+        self.left_viewbox = self.plot.getViewBox()
+
+        # cria viewbox da direita (pressão)
+        self.right_viewbox = pg.ViewBox()
+        self.plot.scene().addItem(self.right_viewbox)
+        self.plot.getAxis("right").linkToView(self.right_viewbox)
+
+        # sincroniza eixo X (tempo) entre esquerda e direita
+        self.right_viewbox.setXLink(self.left_viewbox)
+        self.right_viewbox.setGeometry(self.left_viewbox.sceneBoundingRect())
+
+        # --- sincronia dinâmica ---
+        def update_views():
+            # garante alinhamento horizontal
+            self.right_viewbox.setGeometry(self.left_viewbox.sceneBoundingRect())
+            self.right_viewbox.linkedViewChanged(self.left_viewbox, self.right_viewbox.XAxis)
+
+        self.left_viewbox.sigResized.connect(update_views)
+
+        def sync_views():
+            self.right_viewbox.setGeometry(self.left_viewbox.sceneBoundingRect())
+            self.right_viewbox.linkedViewChanged(self.left_viewbox, self.right_viewbox.XAxis | self.right_viewbox.YAxis)
+
+        self.left_viewbox.sigResized.connect(sync_views)
+        self.left_viewbox.sigRangeChanged.connect(sync_views)
+
+
+
+        # ---------- EMPUXO ----------
+        if self.enable_thrust:
+            col_thrust = None
+            if self.unit_thrust == "kgf":
+                col_thrust = "Kgf.calibrado" if "Kgf.calibrado" in df else "Kgf.avg.cell"
+            elif self.unit_thrust == "N":
+                col_thrust = "N.calibrado" if "N.calibrado" in df else "N.avg.cell"
+
+            if "Kgf.calibrado" in df or "N.calibrado" in df:
+                self.box_force.setTitle("Empuxo Calibrado")
+
+            if col_thrust in df:
+                thrust = df[col_thrust].to_numpy()
+
+                # máximo
+                max_thrust = np.nanmax(thrust)
+                self.lbl_f_max.setText(f"Máx. Empuxo: {max_thrust:.2f} {self.unit_thrust}")
+
+                # tempo de queima (10% do pico)
+                peak = max_thrust
+                mask = thrust > 0.05 * peak
+                if np.any(mask):
+                    idx_start = np.argmax(mask)
+                    idx_end = len(mask) - np.argmax(mask[::-1]) - 1
+                    burn_time = t[idx_end] - t[idx_start]
+                    self.lbl_burn.setText(f"Tempo de Queima: {burn_time:.3f} s")
+
+                    # linhas verticais no início/fim
+                    line_start = pg.InfiniteLine(pos=t[idx_start], angle=90, pen=pg.mkPen("g", style=Qt.PenStyle.DashLine))
+                    line_end = pg.InfiniteLine(pos=t[idx_end], angle=90, pen=pg.mkPen("r", style=Qt.PenStyle.DashLine))
+                    self.plot.addItem(line_start)
+                    self.plot.addItem(line_end)
+                else:
+                    burn_time = 0
+                    self.lbl_burn.setText("-")
+
+
+                # impulso total (em N.s)
+                # thrust_N = thrust * 9.80665 if self.unit_thrust == "kgf" else thrust
+                # impulse = np.trapezoid(thrust_N, t)
+                # self.lbl_impulse.setText(f"Impulso Total: {impulse:.2f} Ns")
+
+                # impulso total apenas no burn time(em N.s)
+                thrust_N = thrust * 9.80665 if self.unit_thrust == "kgf" else thrust
+                if np.any(mask):
+                    t_burn = t[idx_start:idx_end+1]
+                    thrust_burn = thrust_N[idx_start:idx_end+1]
+                    impulse = np.trapezoid(thrust_burn, t_burn)
+                else:
+                    impulse = 0.0
+
+                self.lbl_impulse.setText(f"Impulso Total: {impulse:.2f} Ns")
+
+
+                # curva principal empuxo
+                curve = pg.PlotCurveItem(
+                    t, thrust,
+                    pen=pg.mkPen("b", width=3, dash=[6,3]),  # linha azul tracejada -.-.- 
+                    name=f"Empuxo ({self.unit_thrust})"
+                )
+                self.left_viewbox.addItem(curve)
+                self.legend.addItem(curve, curve.name())
+
+                # plota raw
+                if "adc.raw.cell" in df:
+                    raw = df["adc.raw.cell"].to_numpy()
+                    max_adcraw_cell = np.nanmax(raw)
+                    self.lbl_empuxo_adcraw.setText(f"Máx. ADC raw: {max_adcraw_cell:.0f}/1023")
+                    # curva ADC raw cell
+                    c_raw = pg.PlotCurveItem(
+                        t, raw,
+                        pen=pg.mkPen("c", width=3,dash=[6,3]),           # ciano tracejado -.-.- 
+                        symbol='o', symbolSize=5, symbolBrush='c',
+                        name="ADC Raw Cell"
+                    )
+                    self.left_viewbox.addItem(c_raw)
+                    self.legend.addItem(c_raw, c_raw.name())
+
+                # plota avg
+                if "adc.avg.cell" in df:
+                    avg = df["adc.avg.cell"].to_numpy()
+                    max_adcavg_cell = np.nanmax(avg)
+                    self.lbl_empuxo_adcavg.setText(f"Máx. ADC filtrado: {max_adcavg_cell:.1f}/1023")
+                    # curva ADC avg cell
+                    c_avg = pg.PlotCurveItem(
+                        t, avg,
+                        pen=pg.mkPen("m", width=3, dash=[10,5]),           # magenta tracejado -.-.- 
+                        symbol='o', symbolSize=10, symbolBrush='m',
+                        name="ADC Avg Cell"
+                    )
+                    self.left_viewbox.addItem(c_avg)
+                    self.legend.addItem(c_avg, c_avg.name())
+
+            self.box_force.setVisible(True)
+        else:
+            self.box_force.setVisible(False)
+
+        # ---------- PRESSÃO ----------
+        if self.enable_press:
+            col_press = None
+            if self.unit_press == "psi":
+                col_press = "psi.calibrado" if "psi.calibrado" in df else "psi.avg.tdt"
+            elif self.unit_press == "Pa":
+                col_press = "Pa.calibrado" if "Pa.calibrado" in df else "pascal.raw.tdt"
+            elif self.unit_press == "bar":
+                col_press = "bar.calibrado" if "bar.calibrado" in df else "bar.raw.tdt"
+            elif self.unit_press == "atm":
+                col_press = "atm.calibrado" if "atm.calibrado" in df else "atm.raw.tdt"
+
+            if "psi.calibrado" in df or "Pa.calibrado" in df or "bar.calibrado" in df or "atm.calibrado" in df:
+                self.box_press.setTitle("Pressão Calibrada")
+
+            if col_press in df:
+                press = df[col_press].to_numpy()
+
+                # máximo e média
+                max_press = np.nanmax(press)
+
+                press_peak = max_press
+                press_mask = press > 0.05 * press_peak
+                if np.any(press_mask):
+                    idx_press_start = np.argmax(press_mask)
+                    idx_press_end = len(press_mask) - np.argmax(press_mask[::-1]) - 1
+                    press_time = t[idx_press_end] - t[idx_press_start]
+                    self.lbl_p_duration.setText(f"Tempo de duração: {press_time:.3f} s")
+
+                else:
+                    press_time = 0
+                    self.lbl_p_duration.setText("- (err)")
+
+                self.lbl_p_max.setText(f"Máx. Pressão: {max_press:.2f} {self.unit_press}")
+
+                # curva principal pressão
+                c_press = pg.PlotCurveItem(
+                    t, press,
+                    pen=pg.mkPen("r", width=3, style=Qt.PenStyle.DashDotLine),  # vermelho -x-
+                    symbol='x', symbolSize=10, symbolBrush='r',
+                    name=f"Pressão ({self.unit_press})"
+                )
+                self.right_viewbox.addItem(c_press)
+                self.legend.addItem(c_press, c_press.name())
+
+                # plota raw
+                if "adc.raw.tdt" in df:
+                    raw = df["adc.raw.tdt"].to_numpy()
+                    max_adcraw_press = np.nanmax(raw)
+                    self.lbl_press_adcraw.setText(f"Máx. ADC raw: {max_adcraw_press:.0f}/1023")
+                    # curva ADC raw TDT
+                    c_raw = pg.PlotCurveItem(
+                        t, raw,
+                        pen=pg.mkPen("y",width=3, style=Qt.PenStyle.DashDotLine),           # amarelo -x-
+                        symbol='x', symbolSize=10, symbolBrush='y',
+                        name="ADC Raw TDT"
+                    )
+                    self.right_viewbox.addItem(c_raw)
+                    self.legend.addItem(c_raw, c_raw.name())
+
+                # plota avg
+                if "adc.avg.tdt" in df:
+                    avg = df["adc.avg.tdt"].to_numpy()
+                    max_adcavg_press = np.nanmax(avg)
+                    self.lbl_press_adcavg.setText(f"Máx. ADC filtrado: {max_adcavg_press:.1f}/1023")
+                    # curva ADC avg TDT
+                    c_avg = pg.PlotCurveItem(
+                        t, avg,
+                        pen=pg.mkPen("orange",width=3, style=Qt.PenStyle.DashDotLine),           # preto -x-
+                        symbol='o', symbolSize=10, symbolBrush='orange',
+                        name="ADC Avg TDT"
+                    )
+                    self.right_viewbox.addItem(c_avg)
+                    self.legend.addItem(c_avg, c_avg.name())
+
+            self.box_press.setVisible(True)
+        else:
+            self.box_press.setVisible(False)
 
 
     def _mouseMoved(self, evt):
@@ -666,3 +820,61 @@ class StaticAnalysisPage(QWidget):
                 child.widget().deleteLater()
 
 
+class DataSelectionDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Selecionar dados e unidades")
+        root = QVBoxLayout(self)
+
+        # --- Linha de checkboxes (Empuxo / Pressão / Encoder) ---
+        row_checks = QHBoxLayout()
+        self.cb_force = QCheckBox("Empuxo")
+        self.cb_force.setChecked(True)
+        self.cb_pressure = QCheckBox("Pressão")
+        self.cb_pressure.setChecked(True)
+
+
+        row_checks.addWidget(self.cb_force)
+        row_checks.addWidget(self.cb_pressure)
+        root.addLayout(row_checks)
+
+        # --- Seletores de unidade  ---
+        row_units = QHBoxLayout()
+
+        col_force = QVBoxLayout()
+        col_force.addWidget(QLabel("Unidade (Empuxo)"))
+        self.cmb_force = QComboBox()
+        self.cmb_force.addItems(["kgf", "N"])  # padrão: kgf
+        col_force.addWidget(self.cmb_force)
+        row_units.addLayout(col_force)
+
+        col_press = QVBoxLayout()
+        col_press.addWidget(QLabel("Unidade (Pressão)"))
+        self.cmb_press = QComboBox()
+        self.cmb_press.addItems(["psi", "Pa", "bar", "atm"])  # padrão: psi
+        col_press.addWidget(self.cmb_press)
+        row_units.addLayout(col_press)
+
+        root.addLayout(row_units)
+
+        # botões
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        root.addWidget(btns)
+        btns.accepted.connect(self._on_accept)
+        btns.rejected.connect(self.reject)
+
+    def _on_accept(self):
+        if not (self.cb_force.isChecked() or self.cb_pressure.isChecked()):
+            # precisa ter pelo menos uma categoria
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Aviso", "Selecione pelo menos uma categoria (Empuxo ou/e Pressão).")
+            return
+        self.accept()
+
+    def result_config(self):
+        return {
+            "use_force": self.cb_force.isChecked(),
+            "use_pressure": self.cb_pressure.isChecked(),
+            "unit_force": self.cmb_force.currentText(),
+            "unit_pressure": self.cmb_press.currentText(),
+        }
