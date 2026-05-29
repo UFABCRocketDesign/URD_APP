@@ -43,10 +43,21 @@ class NetManager(QObject):
         return False if self.forceOffline else self.hasNet
 
     def set_force_offline(self, enabled: bool):
-        """
-        Ativa ou desativa o modo offline forçado.
-        """
+        enabled = bool(enabled)
+        if enabled == self.forceOffline:
+            return
+
         self.forceOffline = enabled
-        if enabled and self.hasNet:
-            self.hasNet = False
-            self.netChanged.emit(False)  # 🔔 avisa que foi forçado
+
+        if self.forceOffline:
+            # efetivo = offline
+            if self.hasNet:
+                self.hasNet = False
+            self.netChanged.emit(False)
+        else:
+            # volta a checar na hora e emite imediatamente
+            new_status = self._check_connection()
+            self.hasNet = new_status
+            self.netChanged.emit(self.hasNet)
+
+

@@ -41,12 +41,64 @@ class Rocket3DView(QWidget):
         <head>
         <meta charset="utf-8"/>
         <title>Rocket3D</title>
-        <style>
-          html, body {{ margin: 0; height: 100%; background: white; overflow: hidden; }}
-          canvas {{ display: block; }}
-        </style>
+            <style>
+            html, body {{ margin: 0; height: 100%; background: white; overflow: hidden; }}
+            canvas {{ display: block; }}
+
+            /* ===== Overlay IMU ===== */
+            #imuHud{{
+                position: fixed;
+                top: 10px;
+                left: 10px;
+                z-index: 9999;
+                font-family: Arial, sans-serif;
+                font-size: 12px;
+                background: rgba(255,255,255,0.85);
+                border: 1px solid rgba(0,0,0,0.15);
+                border-radius: 8px;
+                padding: 8px 10px;
+                user-select: none;
+            }}
+            #imuHud .title{{
+                font-weight: 700;
+                margin-bottom: 6px;
+            }}
+            #imuHud .row{{
+                display: flex;
+                gap: 10px;
+                align-items: center;
+            }}
+            .imuItem{{
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                min-width: 40px;
+            }}
+            .imuLed{{
+                width: 10px;
+                height: 10px;
+                border-radius: 3px;
+                border: 1px solid rgba(0,0,0,0.2);
+                background: #f44336; /* vermelho default */
+            }}
+            .imuLed.ok{{
+                background: #4caf50;
+                border-color: #4caf50;
+            }}
+            .imuLabel{{
+                font-weight: 700;
+            }}
+            </style>
         </head>
         <body>
+        <div id="imuHud">
+        <div class="title">IMU</div>
+        <div class="row">
+            <div class="imuItem"><div id="ledX" class="imuLed"></div><div class="imuLabel">X</div></div>
+            <div class="imuItem"><div id="ledY" class="imuLed"></div><div class="imuLabel">Y</div></div>
+            <div class="imuItem"><div id="ledZ" class="imuLed"></div><div class="imuLabel">Z</div></div>
+        </div>
+        </div>
         <script>
         {three_js}
         </script>
@@ -120,22 +172,47 @@ class Rocket3DView(QWidget):
             if (!animId) animate();
         }}
 
+        // ===== IMU Watchdog (Euler) =====
+        const eulerLast = {{ roll: 0, pitch: 0, yaw: 0 }};
+        const LED_THR_MS = 600;
 
-        // API para Python
-        //function updateRocket(qw,qx,qy,qz){{
-        //    if(!rocket) return;
-        //    var q = new THREE.Quaternion(qx,qy,qz,qw);
-        //    rocket.setRotationFromQuaternion(q);
-        //}}
-        //window.updateRocket = updateRocket;
+        function setLed(el, ok){{
+        if(!el) return;
+        if(ok) el.classList.add("ok");
+        else el.classList.remove("ok");
+        }}
 
-        // API para Python (agora recebe ângulos de Euler em radianos)
+        const ledX = document.getElementById("ledX");
+        const ledY = document.getElementById("ledY");
+        const ledZ = document.getElementById("ledZ");
+
+        setInterval(() => {{
+        const now = performance.now();
+        setLed(ledX, (now - eulerLast.roll)  < LED_THR_MS);
+        setLed(ledY, (now - eulerLast.pitch) < LED_THR_MS);
+        setLed(ledZ, (now - eulerLast.yaw)  < LED_THR_MS);
+        }}, 120);
+
         function updateRocket(roll, pitch, yaw) {{
-            if (!rocket) return;
+        if (!rocket) return;
 
+        const now = performance.now();
 
+        const hasR = (roll !== null && roll !== undefined && isFinite(roll));
+        const hasP = (pitch !== null && pitch !== undefined && isFinite(pitch));
+        const hasY = (yaw !== null && yaw !== undefined && isFinite(yaw));
+
+        if (hasR) eulerLast.roll = now;
+        if (hasP) eulerLast.pitch = now;
+        if (hasY) eulerLast.yaw = now;
+
+        // só aplica rotação se tiver os 3 (evita usar valor velho em um eixo)
+        if (hasR && hasP && hasY) {{
             rocket.rotation.set(roll, pitch, yaw, 'ZYX');
         }}
+        }}
+
+        window.updateRocket = updateRocket;
 
         window.updateRocket = updateRocket;
         // --- CRIA O EIXO VISUAL ---
@@ -190,21 +267,28 @@ class Rocket3DView(QWidget):
     #     js = f"if (typeof updateRocket !== 'undefined') updateRocket({qw},{qx},{qy},{qz});"
     #     self.web.page().runJavaScript(js)
 
+    # Inverted pitch and yaw for better visualization on the UI
+    def set_orientation(self, roll: float | None, yaw: float | None, pitch: float | None, degrees: bool = False):
+        """
+        Envia Euler ao JS. Aceita None (manda null no JS).
+        Se degrees=True, converte valores válidos para rad.
+        """
+        def conv(v):
+            if v is None:
+                return None
+            return math.radians(v) if degrees else v
 
-    def set_orientation(self, roll: float, pitch: float, yaw: float, degrees: bool = False):
-        """
-        Atualiza a orientação do foguete no visualizador 3D.
-        Agora envia ângulos de Euler (roll, pitch, yaw) em radianos para o JS.
-        Se degrees=True, converte de graus para radianos antes de enviar.
-        """
-        if degrees:
-            roll = math.radians(roll)
-            pitch = math.radians(pitch)
-            yaw = math.radians(yaw)
+        r = conv(roll)
+        p = conv(pitch)
+        y = conv(yaw)
+
+        # JS: null quando None
+        def js_val(v):
+            return "null" if v is None else f"{v}"
 
         js = (
-            f"if (typeof updateRocket !== 'undefined') "
-            f"updateRocket({roll}, {pitch}, {yaw});"
+            "if (typeof updateRocket !== 'undefined') "
+            f"updateRocket({js_val(r)}, {js_val(p)}, {js_val(y)});"
         )
         self.web.page().runJavaScript(js)
 

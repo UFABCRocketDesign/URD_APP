@@ -1,33 +1,69 @@
-import cv2
-from PyQt5 import QtWidgets, QtGui, QtCore
+import os
+import time
+import platform
+import psutil
 
-class VideoWidget(QtWidgets.QLabel):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setMinimumSize(640, 480)
-        self.cap = cv2.VideoCapture(0)  # ajustar índice / dispositivo correto
-        self.timer = QtCore.QTimer(self)
-        self.timer.timeout.connect(self.next_frame)
-        self.timer.start(30)  # ~33 ms → ~30 fps
 
-    def next_frame(self):
-        ret, frame = self.cap.read()
-        if not ret:
-            return
-        # converter BGR → RGB
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        h, w, ch = frame.shape
-        bytes_per_line = ch * w
-        qt_img = QtGui.QImage(frame.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
-        pix = QtGui.QPixmap.fromImage(qt_img)
-        self.setPixmap(pix)
+def get_cpu_temp():
+    system = platform.system().lower()
 
-    def closeEvent(self, event):
-        self.cap.release()
-        super().closeEvent(event)
+    if system == "linux":
+        thermal_path = "/sys/class/thermal/thermal_zone0/temp"
+        if os.path.exists(thermal_path):
+            try:
+                with open(thermal_path, "r", encoding="utf-8") as f:
+                    raw = f.read().strip()
+                return int(raw) / 1000.0
+            except Exception:
+                pass
+
+        try:
+            temps = psutil.sensors_temperatures()
+            if temps:
+                for entries in temps.values():
+                    for entry in entries:
+                        if getattr(entry, "current", None) is not None:
+                            return float(entry.current)
+        except Exception:
+            pass
+
+    elif system == "windows":
+        try:
+            temps = psutil.sensors_temperatures()
+            if temps:
+                for entries in temps.values():
+                    for entry in entries:
+                        if getattr(entry, "current", None) is not None:
+                            return float(entry.current)
+        except Exception:
+            pass
+
+    return None
+
+
+def main():
+    print("Ctrl+C para sair\n")
+    psutil.cpu_percent(interval=None)  # descarta primeira leitura
+
+    while True:
+        temp = get_cpu_temp()
+        cpu = psutil.cpu_percent(interval=1.0)
+        ram = psutil.virtual_memory().percent
+
+        temp_txt = f"{temp:.1f} °C" if temp is not None else "N/A"
+
+        line = f"Temp CPU: {temp_txt} | CPU: {cpu:.1f}% | RAM: {ram:.1f}%"
+
+        if platform.system().lower() == "windows":
+            try:
+                batt = psutil.sensors_battery()
+                if batt is not None:
+                    line += f" | Bat: {batt.percent:.0f}%"
+            except Exception:
+                pass
+
+        print(line)
+
 
 if __name__ == "__main__":
-    app = QtWidgets.QApplication([])
-    w = VideoWidget()
-    w.show()
-    app.exec_()
+    main()

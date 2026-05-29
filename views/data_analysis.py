@@ -7,6 +7,7 @@ from PySide6.QtGui import (QCursor)
 
 from PySide6.QtCore import Qt
 
+import re
 import pyqtgraph as pg
 import pandas as pd
 import numpy as np
@@ -303,55 +304,173 @@ COLOR_MAP = {
     "adc.avg.tdt": "orange",         # preto - transdutor médio
 }
 
+
 class StaticAnalysisPage(QWidget):
+
+    G0 = 9.80665
+
+    SYSTEMS = {
+        "Novo": {
+            "file": {
+                "open_filter": "CSV Files (*.csv);;All Files (*)",
+                "save_filter": "CSV Files (*.csv)",
+                "default_ext": ".csv",
+                "seps_to_try": [",", ";"],       # tenta vírgula e depois ; (comum no BR)
+                "decimal_to_try": [".", ","],    # tenta ponto e depois vírgula decimal
+            },
+            "columns": {
+                # nomes internos (use esses no código)
+                "internal": {
+                    "time": "time_s",
+                    "weight": "weight_kg",
+                    "force": "force_n",
+                    "press_base": "press_mpa",   # pressão base vem em MPa
+                    "press_v": "press_v",
+                },
+                # cabeçalho externo do CSV (para reconhecer o arquivo)
+                # chave = "normalizado" -> valor = nome interno
+                "external_norm_to_internal": {
+                    "time (s)": "time_s",
+                    "weight (kg)": "weight_kg",
+                    "force (n)": "force_n",
+                    "pressure (mpa)": "press_mpa",
+                    "pressure (v)": "press_v",
+                },
+                # export (para salvar CUT com o mesmo cabeçalho “bonito”)
+                "internal_to_external": {
+                    "time_s": "Time (s)",
+                    "weight_kg": "Weight (kg)",
+                    "force_n": "Force (N)",
+                    "press_mpa": "Pressure (MPa)",
+                    "press_v": "Pressure (V)",
+                },
+                # tipos desejados
+                "dtypes": {
+                    "time_s": "float64",
+                    "weight_kg": "float64",
+                    "force_n": "float64",
+                    "press_mpa": "float64",
+                    "press_v": "float64",
+                },
+                "required": ["time_s"],  # obrigatórias
+            },
+            "units": {
+                # pressão vem em MPa e converte pra unidade escolhida
+                "pressure_base_unit": "MPa",
+                "pressure_supported": ["MPa", "psi", "Pa", "bar", "atm"],
+                "thrust_supported": ["kgf", "N"],
+            },
+        },
+
+        "Antigo": {
+            "file": {
+                "open_filter": "Text Files (*.txt);;All Files (*)",
+                "save_filter": "Text Files (*.txt)",
+                "default_ext": ".txt",
+                "sep": "\t",
+                "skiprows_fallback": 1,
+            },
+            "columns": {
+                "internal": {
+                    "time": "tempo.s",
+                },
+                "dtypes": {
+                    "tempo.s": "float64",
+                    # o resto fica “o que vier” (normalmente float), mas você pode listar aqui também
+                },
+                "required": ["tempo.s"],
+            },
+            "units": {
+                "pressure_supported": ["psi", "Pa", "bar", "atm"],
+                "thrust_supported": ["kgf", "N"],
+            },
+            # mapeamento de colunas do antigo conforme unidades
+            "old_mappings": {
+                "thrust_cols": {  # qual coluna plota conforme unidade escolhida
+                    "kgf": {"cal": "Kgf.calibrado", "raw": "Kgf.avg.cell"},
+                    "N":   {"cal": "N.calibrado",   "raw": "N.avg.cell"},
+                },
+                "press_cols": {
+                    "psi": {"cal": "psi.calibrado", "raw": "psi.avg.tdt"},
+                    "Pa":  {"cal": "Pa.calibrado",  "raw": "pascal.raw.tdt"},
+                    "bar": {"cal": "bar.calibrado", "raw": "bar.raw.tdt"},
+                    "atm": {"cal": "atm.calibrado", "raw": "atm.raw.tdt"},
+                },
+                "adc_cols": {
+                    "cell_raw": "adc.raw.cell",
+                    "cell_avg": "adc.avg.cell",
+                    "tdt_raw": "adc.raw.tdt",
+                    "tdt_avg": "adc.avg.tdt",
+                }
+            }
+        }
+    }
+
+    # ============================================================
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self._show_selection_dialog() 
+        self.df = None
+        self.curves = {}
+
+        self._show_selection_dialog()
+        self.system_type = self.sel["system_type"]
         self.unit_thrust = self.sel["unit_force"]
         self.unit_press = self.sel["unit_pressure"]
         self.enable_thrust = self.sel["use_force"]
         self.enable_press = self.sel["use_pressure"]
 
-    
-        self._build_ui()
+        self.schema = self.SYSTEMS[self.system_type]
 
+        if self.system_type == "Antigo":
+            self._build_ui_antigo()
+        else:
+            self._build_ui_novo()
+
+    # -------------------------
+    # Dialog de seleção
+    # -------------------------
     def _show_selection_dialog(self):
         dlg = DataSelectionDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self.sel = dlg.result_config()  # dict com flags e unidades
+            self.sel = dlg.result_config()
         else:
-            # se cancelar, define um padrão seguro
             self.sel = {
-                "use_force": True, "use_pressure": True,
-                "unit_force": "kgf", "unit_pressure": "psi",
+                "system_type": "Novo",
+                "use_force": True,
+                "use_pressure": True,
+                "unit_force": "kgf",
+                "unit_pressure": "MPa",
             }
 
+    # =========================
+    # UI antigo
+    # =========================
     def _build_ui(self):
+        # compat, se alguém ainda chamar _build_ui
+        self._build_ui_antigo()
+
+    def _build_ui_antigo(self):
         root = QVBoxLayout(self)
 
-        # Botão abrir arquivo
         self.btn_open = QPushButton("Abrir arquivo de teste estático (.txt)")
         self.btn_open.clicked.connect(self.load_file)
         root.addWidget(self.btn_open)
 
-        # Container para resumo + gráfico (se ainda não tem)
         self.analysis_area = QWidget()
         analysis_layout = QVBoxLayout(self.analysis_area)
         root.addWidget(self.analysis_area, stretch=2)
 
-        # --- Linha de resumo em 4 colunas ---
         self.summary_row = QHBoxLayout()
         analysis_layout.addLayout(self.summary_row)
 
-        # Coluna 1: Tempo
         self.box_time = QGroupBox("Tempo")
         self.box_time_lay = QVBoxLayout(self.box_time)
         self.lbl_t_total = QLabel("Tempo Total: —")
         self.box_time_lay.addWidget(self.lbl_t_total)
         self.summary_row.addWidget(self.box_time)
 
-        # Coluna 2: Empuxo
         self.box_force = QGroupBox("Empuxo")
         self.box_force_lay = QVBoxLayout(self.box_force)
         self.lbl_f_max = QLabel("Máx. Empuxo: —")
@@ -366,7 +485,6 @@ class StaticAnalysisPage(QWidget):
         self.box_force_lay.addWidget(self.lbl_empuxo_adcavg)
         self.summary_row.addWidget(self.box_force)
 
-        # Coluna 3: Pressão
         self.box_press = QGroupBox("Pressão")
         self.box_press_lay = QVBoxLayout(self.box_press)
         self.lbl_p_max = QLabel("Máx. Pressão: —")
@@ -379,20 +497,15 @@ class StaticAnalysisPage(QWidget):
         self.box_press_lay.addWidget(self.lbl_press_adcavg)
         self.summary_row.addWidget(self.box_press)
 
-        # --- Gráfico ---
         self.plot = pg.PlotWidget(title="Análise dos Dados")
-        self.legend = self.plot.addLegend()   # cria só aqui
+        self.legend = self.plot.addLegend()
         self.plot.showGrid(x=True, y=True)
         analysis_layout.addWidget(self.plot, stretch=2)
 
-
-        # label do cursor (opcional)
         self.label_hover = QLabel("Cursor: -")
         root.addWidget(self.label_hover)
 
-        # Botões de ações
         btn_row = QHBoxLayout()
-
         self.btn_cut = QPushButton("Recortar Dados")
         self.btn_cut.clicked.connect(self.cut_data)
         btn_row.addWidget(self.btn_cut)
@@ -407,64 +520,175 @@ class StaticAnalysisPage(QWidget):
 
         root.addLayout(btn_row)
 
-        # Conexão do cursor 
         self.plot.scene().sigMouseMoved.connect(self._mouseMoved)
-
-        self.curves = {}
-        self.df = None
 
         self.box_force.setVisible(self.enable_thrust)
         self.box_press.setVisible(self.enable_press)
 
+    # =========================
+    # UI novo
+    # =========================
+    def _build_ui_novo(self):
+        root = QVBoxLayout(self)
 
-    def cut_data(self):
-        if self.df is None:
-            QMessageBox.warning(self, "Aviso", "Nenhum arquivo carregado.")
-            return
+        self.btn_open = QPushButton("Abrir arquivo de teste estático (.csv)")
+        self.btn_open.clicked.connect(self.load_file)
+        root.addWidget(self.btn_open)
 
-        # pega intervalo
-        t_min, ok1 = QInputDialog.getDouble(self, "Corte de Dados", "Tempo inicial (s):", 0, 0)
-        if not ok1:
-            return
-        t_max, ok2 = QInputDialog.getDouble(self, "Corte de Dados", "Tempo final (s):", 0, 0)
-        if not ok2:
-            return
+        self.analysis_area = QWidget()
+        analysis_layout = QVBoxLayout(self.analysis_area)
+        root.addWidget(self.analysis_area, stretch=2)
 
-        # validação
-        if t_min <= 0 or t_max <= 0 or t_min >= t_max:
-            QMessageBox.critical(self, "Erro", "Intervalo inválido.")
-            return
+        self.summary_row = QHBoxLayout()
+        analysis_layout.addLayout(self.summary_row)
 
-        t_col = "tempo.s"
-        if t_col not in self.df.columns:
-            QMessageBox.critical(self, "Erro", f"Coluna '{t_col}' não encontrada.")
-            return
+        self.box_time = QGroupBox("Tempo")
+        self.box_time_lay = QVBoxLayout(self.box_time)
+        self.lbl_t_total = QLabel("Tempo Total: —")
+        self.box_time_lay.addWidget(self.lbl_t_total)
+        self.summary_row.addWidget(self.box_time)
 
-        df_cut = self.df[(self.df[t_col] >= t_min) & (self.df[t_col] <= t_max)]
-        if df_cut.empty:
-            QMessageBox.critical(self, "Erro", "Nenhum dado dentro do intervalo selecionado.")
-            return
+        self.box_force = QGroupBox("Força / Empuxo")
+        self.box_force_lay = QVBoxLayout(self.box_force)
+        self.lbl_f_max = QLabel("Máx. Força: —")
+        self.lbl_w_max = QLabel("Máx. Weight: —")
+        self.lbl_burn = QLabel("Tempo de Queima: —")
+        self.lbl_impulse = QLabel("Impulso Total: —")
+        self.box_force_lay.addWidget(self.lbl_f_max)
+        self.box_force_lay.addWidget(self.lbl_w_max)
+        self.box_force_lay.addWidget(self.lbl_burn)
+        self.box_force_lay.addWidget(self.lbl_impulse)
+        self.summary_row.addWidget(self.box_force)
 
-        # salvar com novo nome
-        path, _ = QFileDialog.getSaveFileName(self, "Salvar Arquivo Cortado", "", "Text Files (*.txt)")
+        self.box_press = QGroupBox("Pressão")
+        self.box_press_lay = QVBoxLayout(self.box_press)
+        self.lbl_p_max = QLabel("Máx. Pressão: —")
+        self.lbl_p_duration = QLabel("Tempo de duração: —")
+        self.lbl_v_max = QLabel("Máx. Tensão: —")
+        self.box_press_lay.addWidget(self.lbl_p_max)
+        self.box_press_lay.addWidget(self.lbl_p_duration)
+        self.box_press_lay.addWidget(self.lbl_v_max)
+        self.summary_row.addWidget(self.box_press)
+
+        self.plot = pg.PlotWidget(title="Análise dos Dados (Novo)")
+        self.legend = self.plot.addLegend()
+        self.plot.showGrid(x=True, y=True)
+        analysis_layout.addWidget(self.plot, stretch=2)
+
+        self.label_hover = QLabel("Cursor: -")
+        root.addWidget(self.label_hover)
+
+        btn_row = QHBoxLayout()
+        self.btn_cut = QPushButton("Recortar Dados")
+        self.btn_cut.clicked.connect(self.cut_data)
+        btn_row.addWidget(self.btn_cut)
+
+        self.btn_calibrate = QPushButton("Calibrar Dados")
+        self.btn_calibrate.setEnabled(False)
+        self.btn_calibrate.setToolTip("Novo: CSV já vem em unidades físicas (kg, N, MPa, V).")
+        btn_row.addWidget(self.btn_calibrate)
+
+        self.btn_screenshot = QPushButton("Exportar Dados")
+        self.btn_screenshot.clicked.connect(self.save_screenshot)
+        btn_row.addWidget(self.btn_screenshot)
+
+        root.addLayout(btn_row)
+
+        self.plot.scene().sigMouseMoved.connect(self._mouseMoved)
+
+        self.box_force.setVisible(self.enable_thrust)
+        self.box_press.setVisible(self.enable_press)
+
+    # =========================
+    # Leitura / conversões
+    # =========================
+    def _norm_col(self, s: str) -> str:
+        s = s.strip().lower()
+        s = re.sub(r"\s+", " ", s)
+        return s
+
+    def _apply_dtypes(self, df: pd.DataFrame, dtypes: dict) -> pd.DataFrame:
+        for col, dtype in dtypes.items():
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+                # dtype final (float64 etc)
+                if dtype.startswith("float"):
+                    df[col] = df[col].astype("float64")
+        return df
+
+    def _load_csv_novo(self, path: str) -> pd.DataFrame:
+        cfg = self.SYSTEMS["Novo"]
+        colcfg = cfg["columns"]
+        filecfg = cfg["file"]
+
+        last_err = None
+        for sep in filecfg["seps_to_try"]:
+            for dec in filecfg["decimal_to_try"]:
+                try:
+                    df = pd.read_csv(path, sep=sep, decimal=dec)
+                    if df.shape[1] == 1:
+                        # tudo caiu numa coluna -> não serve
+                        continue
+
+                    df.columns = [c.strip() for c in df.columns]
+
+                    # rename por cabeçalho normalizado
+                    rename = {}
+                    for c in df.columns:
+                        key = self._norm_col(c)
+                        if key in colcfg["external_norm_to_internal"]:
+                            rename[c] = colcfg["external_norm_to_internal"][key]
+                    df = df.rename(columns=rename)
+
+                    # checa required
+                    for req in colcfg["required"]:
+                        if req not in df.columns:
+                            raise ValueError(f"Coluna obrigatória ausente: {req}")
+
+                    df = self._apply_dtypes(df, colcfg["dtypes"])
+
+                    time_col = colcfg["internal"]["time"]
+                    df = df.dropna(subset=[time_col]).sort_values(time_col).reset_index(drop=True)
+                    return df
+                except Exception as e:
+                    last_err = e
+
+        raise ValueError(f"Falha ao ler CSV (testei separadores/decimais). Último erro: {last_err}")
+
+    def _convert_pressure_from_mpa(self, p_mpa: np.ndarray, unit: str) -> np.ndarray:
+        unit = unit.strip()
+        if unit == "MPa":
+            return p_mpa
+        p_pa = p_mpa * 1_000_000.0
+        if unit == "Pa":
+            return p_pa
+        if unit == "bar":
+            return p_pa / 100_000.0
+        if unit == "atm":
+            return p_pa / 101_325.0
+        if unit == "psi":
+            return p_pa / 6_894.757293168
+        return p_mpa
+
+    # =========================
+    # Ações comuns
+    # =========================
+    def save_screenshot(self):
+        pixmap = self.analysis_area.grab()
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar análise", "", "PNG Image (*.png)")
         if not path:
             return
+        if not path.endswith(".png"):
+            path += ".png"
 
-        if not path.endswith(".txt"):
-            path += ".txt"
-        if "_CUT" not in path:
-            base, ext = path.rsplit(".", 1)
-            path = f"{base}_CUT.{ext}"
-
-        try:
-            df_cut.to_csv(path, sep="\t", index=False)
-            QMessageBox.information(self, "Sucesso", f"Arquivo cortado salvo em:\n{path}")
-        except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Falha ao salvar arquivo:\n{e}")
-
-
+        pixmap.save(path, "PNG")
+        QMessageBox.information(self, "Sucesso", f"Imagem salva em:\n{path}")
 
     def calibrate_data(self):
+        if self.system_type != "Antigo":
+            QMessageBox.information(self, "Info", "Novo: calibração por ADC não se aplica.")
+            return
+
         if self.df is None:
             QMessageBox.warning(self, "Aviso", "Nenhum arquivo carregado.")
             return
@@ -473,13 +697,11 @@ class StaticAnalysisPage(QWidget):
         dialog.setWindowTitle("Calibração")
         layout = QFormLayout(dialog)
 
-        # ---- Empuxo ----
         layout.addRow(QLabel("<b>Empuxo</b>"))
         adc_i_cell_edit = QLineEdit(); layout.addRow("ADC inicial (massa 0):", adc_i_cell_edit)
         adc_f_cell_edit = QLineEdit(); layout.addRow("ADC final (massa com corpo de prova):", adc_f_cell_edit)
         peso_f_cell_edit = QLineEdit(); layout.addRow("Peso corpo de prova (kgf):", peso_f_cell_edit)
 
-        # ---- Pressão ----
         layout.addRow(QLabel("<b>Pressão</b>"))
         adc_i_tdt_edit = QLineEdit(); layout.addRow("ADC inicial transdutor:", adc_i_tdt_edit)
         psi_i_tdt_edit = QLineEdit(); layout.addRow("Pressão inicial transdutor:", psi_i_tdt_edit)
@@ -506,25 +728,20 @@ class StaticAnalysisPage(QWidget):
             return
 
         df_calib = self.df.copy()
-
-        # ---- Calibração Empuxo ----
         if adc_i_cell != 0 and adc_f_cell != 0 and peso_f_cell != 0:
             m_cell = peso_f_cell / (adc_f_cell - adc_i_cell)
             df_calib["Kgf.calibrado"] = (df_calib["adc.raw.cell"] - adc_i_cell) * m_cell
-            df_calib["N.calibrado"] = df_calib["Kgf.calibrado"] * 9.80665
+            df_calib["N.calibrado"] = df_calib["Kgf.calibrado"] * self.G0
 
-        # ---- Calibração Pressão ----
         if adc_i_tdt != 0 and adc_45v != 0 and adc_45v > adc_i_tdt:
             m_tdt = 500 / (adc_45v - adc_i_tdt)
             psi_values = (df_calib["adc.avg.tdt"] - adc_i_tdt) * m_tdt + psi_i_tdt
-            # psi_values = psi_values.clip(lower=0, upper=500)  # força limite
             df_calib["psi.calibrado"] = psi_values
             df_calib["Pa.calibrado"] = df_calib["psi.calibrado"] * 6894.76
             df_calib["atm.calibrado"] = df_calib["psi.calibrado"] / 14.696
             df_calib["bar.calibrado"] = df_calib["psi.calibrado"] / 14.5038
 
-        # salvar com novo nome
-        path, _ = QFileDialog.getSaveFileName(self, "Salvar Arquivo Calibrado", "", "Text Files (*.txt)")
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar Arquivo Calibrado", "", self.SYSTEMS["Antigo"]["file"]["save_filter"])
         if not path:
             return
         if not path.endswith(".txt"):
@@ -539,340 +756,436 @@ class StaticAnalysisPage(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Falha ao salvar arquivo:\n{e}")
 
+    def cut_data(self):
+        if self.df is None:
+            QMessageBox.warning(self, "Aviso", "Nenhum arquivo carregado.")
+            return
 
-    def save_screenshot(self):
-        # captura apenas o container resumo + gráfico
-        pixmap = self.analysis_area.grab()
+        t_min, ok1 = QInputDialog.getDouble(self, "Corte de Dados", "Tempo inicial (s):", 0, 0)
+        if not ok1:
+            return
+        t_max, ok2 = QInputDialog.getDouble(self, "Corte de Dados", "Tempo final (s):", 0, 0)
+        if not ok2:
+            return
 
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Salvar análise",
-            "",
-            "PNG Image (*.png)"
-        )
+        if t_min < 0 or t_max <= 0 or t_min >= t_max:
+            QMessageBox.critical(self, "Erro", "Intervalo inválido.")
+            return
+
+        if self.system_type == "Novo":
+            t_col = self.schema["columns"]["internal"]["time"]
+            dialog_filter = self.schema["file"]["save_filter"]
+            ext = self.schema["file"]["default_ext"]
+            sep = ","
+        else:
+            t_col = self.schema["columns"]["internal"]["time"]
+            dialog_filter = self.schema["file"]["save_filter"]
+            ext = self.schema["file"]["default_ext"]
+            sep = "\t"
+
+        if t_col not in self.df.columns:
+            QMessageBox.critical(self, "Erro", f"Coluna '{t_col}' não encontrada.")
+            return
+
+        df_cut = self.df[(self.df[t_col] >= t_min) & (self.df[t_col] <= t_max)]
+        if df_cut.empty:
+            QMessageBox.critical(self, "Erro", "Nenhum dado dentro do intervalo selecionado.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar Arquivo Cortado", "", dialog_filter)
         if not path:
             return
-        if not path.endswith(".png"):
-            path += ".png"
+        if not path.endswith(ext):
+            path += ext
+        if "_CUT" not in path.upper():
+            base, _ = path.rsplit(".", 1)
+            path = f"{base}_CUT{ext}"
 
-        pixmap.save(path, "PNG")
-        QMessageBox.information(self, "Sucesso", f"Imagem salva em:\n{path}")
+        try:
+            if self.system_type == "Novo":
+                df_out = df_cut.rename(columns=self.schema["columns"]["internal_to_external"])
+                df_out.to_csv(path, sep=sep, index=False)
+            else:
+                df_cut.to_csv(path, sep=sep, index=False)
 
+            QMessageBox.information(self, "Sucesso", f"Arquivo cortado salvo em:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao salvar arquivo:\n{e}")
 
+    # =========================
+    # Load / Analyze
+    # =========================
     def load_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Abrir Arquivo", "", "Text Files (*.txt)")
+        path, _ = QFileDialog.getOpenFileName(self, "Abrir Arquivo", "", self.schema["file"]["open_filter"])
         if not path:
             return
 
         try:
-            df = pd.read_csv(path, sep="\t")
+            if self.system_type == "Novo":
+                df = self._load_csv_novo(path)
+            else:
+                sep = self.schema["file"]["sep"]
+                df = pd.read_csv(path, sep=sep)
 
-            if not df.columns.str.contains("tempo.s").any():
-                # tenta de novo pulando a primeira linha
-                df = pd.read_csv(path, sep="\t", skiprows=1)
+                time_col = self.schema["columns"]["internal"]["time"]
+                if time_col not in df.columns:
+                    df = pd.read_csv(path, sep=sep, skiprows=self.schema["file"]["skiprows_fallback"])
 
-            df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
-            
+                df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
+
+                for req in self.schema["columns"]["required"]:
+                    if req not in df.columns:
+                        raise ValueError(f"Coluna obrigatória ausente: {req}")
+
+                df = self._apply_dtypes(df, self.schema["columns"]["dtypes"])
         except Exception as e:
-            QMessageBox.critical(self, "Erro", "Arquivo inválido: coluna 'tempo.s' não encontrada.\n {e}")
-            return
-
-        if "tempo.s" not in df.columns:
-            QMessageBox.critical(self, "Erro", "Arquivo inválido: coluna 'tempo.s' não encontrada.")
+            QMessageBox.critical(self, "Erro", f"Falha ao ler arquivo:\n{e}")
             return
 
         self.df = df
         self.analyze_data()
 
     def analyze_data(self):
-        df = self.df
-        t = df["tempo.s"].to_numpy()
+        if self.df is None:
+            return
+        if self.system_type == "Novo":
+            self._analyze_data_novo()
+        else:
+            self._analyze_data_antigo()
 
-        # Limpa o gráfico
+    def _prepare_dual_axes(self):
         self.plot.clear()
-        self.legend.clear()
 
+        if hasattr(self, "right_viewbox") and self.right_viewbox is not None:
+            try:
+                self.plot.scene().removeItem(self.right_viewbox)
+            except Exception:
+                pass
 
-        # Ajusta os rótulos e eixos
-        self.plot.setLabel("bottom", "Tempo", "s")
-        self.plot.setLabel("right", "Pressão", self.unit_press)
-        self.plot.setLabel("left", "Empuxo", self.unit_thrust)
-        self.plot.showAxis("left")
-        self.plot.showAxis("right")
+        self.legend = self.plot.addLegend()
+        self.plot.showGrid(x=True, y=True)
 
-
-        # cria eixo da esquerda (empuxo)
         self.left_viewbox = self.plot.getViewBox()
 
-        # cria viewbox da direita (pressão)
         self.right_viewbox = pg.ViewBox()
+        self.right_viewbox.setMouseEnabled(x=True, y=False)   
+        self.right_viewbox.setMenuEnabled(False)               
+        self.right_viewbox.setZValue(-100)                     
+
         self.plot.scene().addItem(self.right_viewbox)
         self.plot.getAxis("right").linkToView(self.right_viewbox)
 
-        # sincroniza eixo X (tempo) entre esquerda e direita
         self.right_viewbox.setXLink(self.left_viewbox)
         self.right_viewbox.setGeometry(self.left_viewbox.sceneBoundingRect())
 
-        # --- sincronia dinâmica ---
-        def update_views():
-            # garante alinhamento horizontal
+        def sync_views():
             self.right_viewbox.setGeometry(self.left_viewbox.sceneBoundingRect())
             self.right_viewbox.linkedViewChanged(self.left_viewbox, self.right_viewbox.XAxis)
 
-        self.left_viewbox.sigResized.connect(update_views)
-
-        def sync_views():
-            self.right_viewbox.setGeometry(self.left_viewbox.sceneBoundingRect())
-            self.right_viewbox.linkedViewChanged(self.left_viewbox, self.right_viewbox.XAxis | self.right_viewbox.YAxis)
-
         self.left_viewbox.sigResized.connect(sync_views)
-        self.left_viewbox.sigRangeChanged.connect(sync_views)
 
 
+    # =========================
+    # Analyze Antigo
+    # =========================
+    def _analyze_data_antigo(self):
+        df = self.df
+        time_col = self.schema["columns"]["internal"]["time"]
+        t = df[time_col].to_numpy()
 
-        # ---------- EMPUXO ----------
+        self._prepare_dual_axes()
+
+        self.plot.setLabel("bottom", "Tempo", "s")
+        self.plot.setLabel("left", "Empuxo", self.unit_thrust)
+        self.plot.setLabel("right", "Pressão", self.unit_press)
+        self.plot.showAxis("left"); self.plot.showAxis("right")
+
+        if len(t) >= 2:
+            self.lbl_t_total.setText(f"Tempo Total: {(t[-1]-t[0]):.3f} s")
+        else:
+            self.lbl_t_total.setText("Tempo Total: —")
+
+        maps = self.schema["old_mappings"]
+        adc = maps["adc_cols"]
+
+        # ---- EMPUXO
         if self.enable_thrust:
-            col_thrust = None
-            if self.unit_thrust == "kgf":
-                col_thrust = "Kgf.calibrado" if "Kgf.calibrado" in df else "Kgf.avg.cell"
-            elif self.unit_thrust == "N":
-                col_thrust = "N.calibrado" if "N.calibrado" in df else "N.avg.cell"
+            m = maps["thrust_cols"][self.unit_thrust]
+            col_thrust = m["cal"] if m["cal"] in df.columns else m["raw"]
 
-            if "Kgf.calibrado" in df or "N.calibrado" in df:
+            if m["cal"] in df.columns:
                 self.box_force.setTitle("Empuxo Calibrado")
+            else:
+                self.box_force.setTitle("Empuxo")
 
-            if col_thrust in df:
+            if col_thrust in df.columns:
                 thrust = df[col_thrust].to_numpy()
+                peak = float(np.nanmax(thrust))
+                self.lbl_f_max.setText(f"Máx. Empuxo: {peak:.2f} {self.unit_thrust}")
 
-                # máximo
-                max_thrust = np.nanmax(thrust)
-                self.lbl_f_max.setText(f"Máx. Empuxo: {max_thrust:.2f} {self.unit_thrust}")
-
-                # tempo de queima (10% do pico)
-                peak = max_thrust
                 mask = thrust > 0.05 * peak
                 if np.any(mask):
-                    idx_start = np.argmax(mask)
-                    idx_end = len(mask) - np.argmax(mask[::-1]) - 1
-                    burn_time = t[idx_end] - t[idx_start]
-                    self.lbl_burn.setText(f"Tempo de Queima: {burn_time:.3f} s")
+                    s = int(np.argmax(mask))
+                    e = int(len(mask) - np.argmax(mask[::-1]) - 1)
+                    self.lbl_burn.setText(f"Tempo de Queima: {(t[e]-t[s]):.3f} s")
+                    self.plot.addItem(pg.InfiniteLine(pos=float(t[s]), angle=90, pen=pg.mkPen("g", style=Qt.PenStyle.DashLine)))
+                    self.plot.addItem(pg.InfiniteLine(pos=float(t[e]), angle=90, pen=pg.mkPen("r", style=Qt.PenStyle.DashLine)))
 
-                    # linhas verticais no início/fim
-                    line_start = pg.InfiniteLine(pos=t[idx_start], angle=90, pen=pg.mkPen("g", style=Qt.PenStyle.DashLine))
-                    line_end = pg.InfiniteLine(pos=t[idx_end], angle=90, pen=pg.mkPen("r", style=Qt.PenStyle.DashLine))
-                    self.plot.addItem(line_start)
-                    self.plot.addItem(line_end)
-                else:
-                    burn_time = 0
-                    self.lbl_burn.setText("-")
-
-
-                # impulso total (em N.s)
-                # thrust_N = thrust * 9.80665 if self.unit_thrust == "kgf" else thrust
-                # impulse = np.trapezoid(thrust_N, t)
-                # self.lbl_impulse.setText(f"Impulso Total: {impulse:.2f} Ns")
-
-                # impulso total apenas no burn time(em N.s)
-                thrust_N = thrust * 9.80665 if self.unit_thrust == "kgf" else thrust
-                if np.any(mask):
-                    t_burn = t[idx_start:idx_end+1]
-                    thrust_burn = thrust_N[idx_start:idx_end+1]
-                    impulse = np.trapezoid(thrust_burn, t_burn)
+                    thrust_N = thrust * self.G0 if self.unit_thrust == "kgf" else thrust
+                    impulse = float(np.trapezoid(thrust_N[s:e+1], t[s:e+1]))
                 else:
                     impulse = 0.0
+                    self.lbl_burn.setText("Tempo de Queima: —")
 
                 self.lbl_impulse.setText(f"Impulso Total: {impulse:.2f} Ns")
 
+                c = pg.PlotCurveItem(t, thrust, pen=pg.mkPen("b", width=3, dash=[6,3]),
+                                     name=f"Empuxo ({self.unit_thrust})")
+                self.left_viewbox.addItem(c)
+                self.legend.addItem(c, c.name())
 
-                # curva principal empuxo
-                curve = pg.PlotCurveItem(
-                    t, thrust,
-                    pen=pg.mkPen("b", width=3, dash=[6,3]),  # linha azul tracejada -.-.- 
-                    name=f"Empuxo ({self.unit_thrust})"
-                )
-                self.left_viewbox.addItem(curve)
-                self.legend.addItem(curve, curve.name())
-
-                # plota raw
-                if "adc.raw.cell" in df:
-                    raw = df["adc.raw.cell"].to_numpy()
-                    max_adcraw_cell = np.nanmax(raw)
-                    self.lbl_empuxo_adcraw.setText(f"Máx. ADC raw: {max_adcraw_cell:.0f}/1023")
-                    # curva ADC raw cell
-                    c_raw = pg.PlotCurveItem(
-                        t, raw,
-                        pen=pg.mkPen("c", width=3,dash=[6,3]),           # ciano tracejado -.-.- 
-                        symbol='o', symbolSize=5, symbolBrush='c',
-                        name="ADC Raw Cell"
-                    )
-                    self.left_viewbox.addItem(c_raw)
-                    self.legend.addItem(c_raw, c_raw.name())
-
-                # plota avg
-                if "adc.avg.cell" in df:
-                    avg = df["adc.avg.cell"].to_numpy()
-                    max_adcavg_cell = np.nanmax(avg)
-                    self.lbl_empuxo_adcavg.setText(f"Máx. ADC filtrado: {max_adcavg_cell:.1f}/1023")
-                    # curva ADC avg cell
-                    c_avg = pg.PlotCurveItem(
-                        t, avg,
-                        pen=pg.mkPen("m", width=3, dash=[10,5]),           # magenta tracejado -.-.- 
-                        symbol='o', symbolSize=10, symbolBrush='m',
-                        name="ADC Avg Cell"
-                    )
-                    self.left_viewbox.addItem(c_avg)
-                    self.legend.addItem(c_avg, c_avg.name())
+                if adc["cell_raw"] in df.columns:
+                    raw = df[adc["cell_raw"]].to_numpy()
+                    self.lbl_empuxo_adcraw.setText(f"Máx. ADC raw: {np.nanmax(raw):.0f}/1023")
+                if adc["cell_avg"] in df.columns:
+                    avg = df[adc["cell_avg"]].to_numpy()
+                    self.lbl_empuxo_adcavg.setText(f"Máx. ADC filtrado: {np.nanmax(avg):.1f}/1023")
 
             self.box_force.setVisible(True)
         else:
             self.box_force.setVisible(False)
 
-        # ---------- PRESSÃO ----------
+        # ---- PRESSÃO
         if self.enable_press:
-            col_press = None
-            if self.unit_press == "psi":
-                col_press = "psi.calibrado" if "psi.calibrado" in df else "psi.avg.tdt"
-            elif self.unit_press == "Pa":
-                col_press = "Pa.calibrado" if "Pa.calibrado" in df else "pascal.raw.tdt"
-            elif self.unit_press == "bar":
-                col_press = "bar.calibrado" if "bar.calibrado" in df else "bar.raw.tdt"
-            elif self.unit_press == "atm":
-                col_press = "atm.calibrado" if "atm.calibrado" in df else "atm.raw.tdt"
+            m = maps["press_cols"][self.unit_press]
+            col_press = m["cal"] if m["cal"] in df.columns else m["raw"]
 
-            if "psi.calibrado" in df or "Pa.calibrado" in df or "bar.calibrado" in df or "atm.calibrado" in df:
+            if m["cal"] in df.columns:
                 self.box_press.setTitle("Pressão Calibrada")
+            else:
+                self.box_press.setTitle("Pressão")
 
-            if col_press in df:
+            if col_press in df.columns:
                 press = df[col_press].to_numpy()
+                pmax = float(np.nanmax(press))
+                self.lbl_p_max.setText(f"Máx. Pressão: {pmax:.2f} {self.unit_press}")
 
-                # máximo e média
-                max_press = np.nanmax(press)
-
-                press_peak = max_press
-                press_mask = press > 0.05 * press_peak
-                if np.any(press_mask):
-                    idx_press_start = np.argmax(press_mask)
-                    idx_press_end = len(press_mask) - np.argmax(press_mask[::-1]) - 1
-                    press_time = t[idx_press_end] - t[idx_press_start]
-                    self.lbl_p_duration.setText(f"Tempo de duração: {press_time:.3f} s")
-
+                mask = press > 0.05 * pmax
+                if np.any(mask):
+                    s = int(np.argmax(mask))
+                    e = int(len(mask) - np.argmax(mask[::-1]) - 1)
+                    self.lbl_p_duration.setText(f"Tempo de duração: {(t[e]-t[s]):.3f} s")
                 else:
-                    press_time = 0
-                    self.lbl_p_duration.setText("- (err)")
+                    self.lbl_p_duration.setText("Tempo de duração: —")
 
-                self.lbl_p_max.setText(f"Máx. Pressão: {max_press:.2f} {self.unit_press}")
+                c = pg.PlotCurveItem(t, press, pen=pg.mkPen("r", width=3, style=Qt.PenStyle.DashDotLine),
+                                     name=f"Pressão ({self.unit_press})")
+                self.right_viewbox.addItem(c)
+                self.legend.addItem(c, c.name())
 
-                # curva principal pressão
-                c_press = pg.PlotCurveItem(
-                    t, press,
-                    pen=pg.mkPen("r", width=3, style=Qt.PenStyle.DashDotLine),  # vermelho -x-
-                    symbol='x', symbolSize=10, symbolBrush='r',
-                    name=f"Pressão ({self.unit_press})"
-                )
-                self.right_viewbox.addItem(c_press)
-                self.legend.addItem(c_press, c_press.name())
-
-                # plota raw
-                if "adc.raw.tdt" in df:
-                    raw = df["adc.raw.tdt"].to_numpy()
-                    max_adcraw_press = np.nanmax(raw)
-                    self.lbl_press_adcraw.setText(f"Máx. ADC raw: {max_adcraw_press:.0f}/1023")
-                    # curva ADC raw TDT
-                    c_raw = pg.PlotCurveItem(
-                        t, raw,
-                        pen=pg.mkPen("y",width=3, style=Qt.PenStyle.DashDotLine),           # amarelo -x-
-                        symbol='x', symbolSize=10, symbolBrush='y',
-                        name="ADC Raw TDT"
-                    )
-                    self.right_viewbox.addItem(c_raw)
-                    self.legend.addItem(c_raw, c_raw.name())
-
-                # plota avg
-                if "adc.avg.tdt" in df:
-                    avg = df["adc.avg.tdt"].to_numpy()
-                    max_adcavg_press = np.nanmax(avg)
-                    self.lbl_press_adcavg.setText(f"Máx. ADC filtrado: {max_adcavg_press:.1f}/1023")
-                    # curva ADC avg TDT
-                    c_avg = pg.PlotCurveItem(
-                        t, avg,
-                        pen=pg.mkPen("orange",width=3, style=Qt.PenStyle.DashDotLine),           # preto -x-
-                        symbol='o', symbolSize=10, symbolBrush='orange',
-                        name="ADC Avg TDT"
-                    )
-                    self.right_viewbox.addItem(c_avg)
-                    self.legend.addItem(c_avg, c_avg.name())
+                if adc["tdt_raw"] in df.columns:
+                    raw = df[adc["tdt_raw"]].to_numpy()
+                    self.lbl_press_adcraw.setText(f"Máx. ADC raw: {np.nanmax(raw):.0f}/1023")
+                if adc["tdt_avg"] in df.columns:
+                    avg = df[adc["tdt_avg"]].to_numpy()
+                    self.lbl_press_adcavg.setText(f"Máx. ADC filtrado: {np.nanmax(avg):.1f}/1023")
 
             self.box_press.setVisible(True)
         else:
             self.box_press.setVisible(False)
 
+    # =========================
+    # Analyze Novo
+    # =========================
+    def _analyze_data_novo(self):
+        df = self.df
+        cols = self.schema["columns"]["internal"]
 
+        tcol = cols["time"]
+        wcol = cols["weight"]
+        fcol = cols["force"]
+        pcol = cols["press_base"]
+        vcol = cols["press_v"]
+
+        t = df[tcol].to_numpy()
+        self._prepare_dual_axes()
+
+        self.plot.setLabel("bottom", "Tempo", "s")
+        self.plot.setLabel("left", "Força / Empuxo", self.unit_thrust)
+        self.plot.setLabel("right", "Pressão", self.unit_press)
+        self.plot.showAxis("left"); self.plot.showAxis("right")
+
+        if len(t) >= 2:
+            self.lbl_t_total.setText(f"Tempo Total: {(t[-1]-t[0]):.3f} s")
+        else:
+            self.lbl_t_total.setText("Tempo Total: —")
+
+        # ---- FORÇA
+        if self.enable_thrust:
+            force_n = None
+            if fcol in df.columns and df[fcol].notna().any():
+                force_n = df[fcol].to_numpy()
+            elif wcol in df.columns and df[wcol].notna().any():
+                force_n = df[wcol].to_numpy() * self.G0
+
+            if force_n is None:
+                self.lbl_f_max.setText("Máx. Força: — (sem Force/Weight)")
+                self.lbl_w_max.setText("Máx. Weight: —")
+                self.lbl_burn.setText("Tempo de Queima: —")
+                self.lbl_impulse.setText("Impulso Total: —")
+            else:
+                y_force = force_n if self.unit_thrust == "N" else (force_n / self.G0)
+
+                self.lbl_f_max.setText(f"Máx. Força: {float(np.nanmax(y_force)):.2f} {self.unit_thrust}")
+                if wcol in df.columns and df[wcol].notna().any():
+                    self.lbl_w_max.setText(f"Máx. Weight: {float(np.nanmax(df[wcol].to_numpy())):.3f} kg")
+                else:
+                    self.lbl_w_max.setText("Máx. Weight: —")
+
+                peak = float(np.nanmax(force_n))
+                mask = force_n > 0.05 * peak
+                if np.any(mask):
+                    s = int(np.argmax(mask))
+                    e = int(len(mask) - np.argmax(mask[::-1]) - 1)
+                    self.lbl_burn.setText(f"Tempo de Queima: {(t[e]-t[s]):.3f} s")
+                    self.plot.addItem(pg.InfiniteLine(pos=float(t[s]), angle=90, pen=pg.mkPen("g", style=Qt.PenStyle.DashLine)))
+                    self.plot.addItem(pg.InfiniteLine(pos=float(t[e]), angle=90, pen=pg.mkPen("r", style=Qt.PenStyle.DashLine)))
+                    impulse = float(np.trapezoid(force_n[s:e+1], t[s:e+1]))
+                else:
+                    impulse = 0.0
+                    self.lbl_burn.setText("Tempo de Queima: —")
+
+                self.lbl_impulse.setText(f"Impulso Total: {impulse:.2f} N·s")
+
+                c = pg.PlotCurveItem(t, y_force, pen=pg.mkPen("b", width=3),
+                                     name=f"Força ({self.unit_thrust})")
+                self.left_viewbox.addItem(c)
+                self.legend.addItem(c, c.name())
+
+            self.box_force.setVisible(True)
+        else:
+            self.box_force.setVisible(False)
+
+        # ---- PRESSÃO
+        if self.enable_press:
+            if pcol in df.columns and df[pcol].notna().any():
+                p_mpa = df[pcol].to_numpy()
+                p = self._convert_pressure_from_mpa(p_mpa, self.unit_press)
+
+                pmax = float(np.nanmax(p))
+                self.lbl_p_max.setText(f"Máx. Pressão: {pmax:.3f} {self.unit_press}")
+
+                mask = p > 0.05 * pmax
+                if np.any(mask):
+                    s = int(np.argmax(mask))
+                    e = int(len(mask) - np.argmax(mask[::-1]) - 1)
+                    self.lbl_p_duration.setText(f"Tempo de duração: {(t[e]-t[s]):.3f} s")
+                else:
+                    self.lbl_p_duration.setText("Tempo de duração: —")
+
+                c = pg.PlotCurveItem(t, p, pen=pg.mkPen("r", width=3, style=Qt.PenStyle.DashDotLine),
+                                     name=f"Pressão ({self.unit_press})")
+                self.right_viewbox.addItem(c)
+                self.legend.addItem(c, c.name())
+
+                if vcol in df.columns and df[vcol].notna().any():
+                    v = df[vcol].to_numpy()
+                    vmax = float(np.nanmax(v))
+                    self.lbl_v_max.setText(f"Máx. Tensão: {vmax:.3f} V")
+
+                    # escalona V para o range da pressão (só visual)
+                    vmin = float(np.nanmin(v))
+                    pmin = float(np.nanmin(p))
+                    if (vmax - vmin) > 1e-12 and (pmax - pmin) > 1e-12:
+                        v_scaled = (v - vmin) / (vmax - vmin) * (pmax - pmin) + pmin
+                        cv = pg.PlotCurveItem(t, v_scaled, pen=pg.mkPen("y", width=2, style=Qt.PenStyle.DotLine),
+                                              name="Pressão (V) [escalonada]")
+                        self.right_viewbox.addItem(cv)
+                        self.legend.addItem(cv, cv.name())
+                else:
+                    self.lbl_v_max.setText("Máx. Tensão: —")
+            else:
+                self.lbl_p_max.setText("Máx. Pressão: — (sem Pressure (MPa))")
+                self.lbl_p_duration.setText("Tempo de duração: —")
+                self.lbl_v_max.setText("Máx. Tensão: —")
+
+            self.box_press.setVisible(True)
+        else:
+            self.box_press.setVisible(False)
+
+    # =========================
+    # Cursor / util
+    # =========================
     def _mouseMoved(self, evt):
         pos = evt
         if self.plot.sceneBoundingRect().contains(pos):
             mousePoint = self.plot.plotItem.vb.mapSceneToView(pos)
             self.label_hover.setText(f"Cursor: t={mousePoint.x():.2f}s, y={mousePoint.y():.2f}")
 
-    def clear_layout(self, layout):
-        while layout.count():
-            child = layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
 
 class DataSelectionDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Selecionar dados e unidades")
-        root = QVBoxLayout(self)
 
-        # --- Linha de checkboxes (Empuxo / Pressão / Encoder) ---
+        main = QVBoxLayout(self)
+        up = QHBoxLayout(self)
+
+        col_type = QVBoxLayout()
+        col_type.addWidget(QLabel("Sistema"))
+        self.system_type = QComboBox()
+        self.system_type.addItems(["Antigo", "Novo"])
+        self.system_type.setCurrentIndex(1)
+        col_type.addWidget(self.system_type)
+        up.addLayout(col_type)
+
+        right = QVBoxLayout()
+
         row_checks = QHBoxLayout()
         self.cb_force = QCheckBox("Empuxo")
         self.cb_force.setChecked(True)
         self.cb_pressure = QCheckBox("Pressão")
         self.cb_pressure.setChecked(True)
-
-
         row_checks.addWidget(self.cb_force)
         row_checks.addWidget(self.cb_pressure)
-        root.addLayout(row_checks)
+        right.addLayout(row_checks)
 
-        # --- Seletores de unidade  ---
         row_units = QHBoxLayout()
 
         col_force = QVBoxLayout()
         col_force.addWidget(QLabel("Unidade (Empuxo)"))
         self.cmb_force = QComboBox()
-        self.cmb_force.addItems(["kgf", "N"])  # padrão: kgf
+        self.cmb_force.addItems(["kgf", "N"])
         col_force.addWidget(self.cmb_force)
         row_units.addLayout(col_force)
 
         col_press = QVBoxLayout()
         col_press.addWidget(QLabel("Unidade (Pressão)"))
         self.cmb_press = QComboBox()
-        self.cmb_press.addItems(["psi", "Pa", "bar", "atm"])  # padrão: psi
+        self.cmb_press.addItems(["MPa", "psi", "Pa", "bar", "atm"])
+        self.cmb_press.setCurrentText("MPa")
         col_press.addWidget(self.cmb_press)
         row_units.addLayout(col_press)
 
-        root.addLayout(row_units)
+        right.addLayout(row_units)
 
-        # botões
+        up.addLayout(right)
+        main.addLayout(up)
+
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        root.addWidget(btns)
+        main.addWidget(btns, alignment=Qt.AlignmentFlag.AlignCenter)
         btns.accepted.connect(self._on_accept)
         btns.rejected.connect(self.reject)
 
     def _on_accept(self):
         if not (self.cb_force.isChecked() or self.cb_pressure.isChecked()):
-            # precisa ter pelo menos uma categoria
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Aviso", "Selecione pelo menos uma categoria (Empuxo ou/e Pressão).")
+            QMessageBox.warning(self, "Aviso", "Selecione pelo menos uma categoria (Empuxo e/ou Pressão).")
             return
         self.accept()
 
     def result_config(self):
         return {
+            "system_type": self.system_type.currentText(),
             "use_force": self.cb_force.isChecked(),
             "use_pressure": self.cb_pressure.isChecked(),
             "unit_force": self.cmb_force.currentText(),
