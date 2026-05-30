@@ -1,5 +1,5 @@
 # net_manager.py
-import socket
+import socket, threading, time
 from PySide6.QtCore import QObject, Signal
 
 class NetManager(QObject):
@@ -10,6 +10,7 @@ class NetManager(QObject):
         super().__init__(parent)
         self.hasNet = self._check_connection()
         self.forceOffline = False  # se True, ignora internet real
+        threading.Thread(target=self._loop, daemon=True).start()
 
     def _check_connection(self, host="8.8.8.8", port=53, timeout=2) -> bool:
         """Tenta conexão rápida com DNS Google para checar internet."""
@@ -19,6 +20,11 @@ class NetManager(QObject):
             return True
         except Exception:
             return False
+
+    def _loop(self):
+        while True:
+            time.sleep(2)
+            self.update()
 
     def update(self):
         """
