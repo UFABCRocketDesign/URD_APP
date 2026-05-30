@@ -442,10 +442,6 @@ class MainWindow(QMainWindow):
         self.netManager = NetManager()
         self.netManager.netChanged.connect(lambda _status: self._update_net_label())
 
-        self.timer_net = QTimer(self)
-        self.timer_net.timeout.connect(self._check_net)
-        self.timer_net.start(2000)
-        
         self.timer_sysinfo = QTimer(self)
         self.timer_sysinfo.timeout.connect(self._update_system_info)
         self.timer_sysinfo.start(5000)
