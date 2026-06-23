@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import csv
 import math
+import platform
 import queue
 import re
 import time
@@ -24,13 +25,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import pyqtgraph as pg
 import serial
 import serial.tools.list_ports
-import pyqtgraph as pg
-
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -45,13 +46,11 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QCheckBox,
     QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
-
 
 # ============================================================
 # Utilidades de simulação
@@ -125,7 +124,9 @@ class FlightSimulation:
 
         scale = cls.UNIT_SCALE_TO_PA.get(pressure_unit, 1.0)
         samples: list[SimulationSample] = []
-        raw_rows: list[tuple[float, float, float]] = []  # tempo, pressão real em Pa, altitude bruta
+        raw_rows: list[
+            tuple[float, float, float]
+        ] = []  # tempo, pressão real em Pa, altitude bruta
 
         with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f, delimiter=separator)
@@ -134,10 +135,14 @@ class FlightSimulation:
                 raise ValueError("CSV sem cabeçalho.")
 
             if time_column not in reader.fieldnames:
-                raise ValueError(f"Coluna de tempo '{time_column}' não encontrada. Colunas: {reader.fieldnames}")
+                raise ValueError(
+                    f"Coluna de tempo '{time_column}' não encontrada. Colunas: {reader.fieldnames}"
+                )
 
             if pressure_column not in reader.fieldnames:
-                raise ValueError(f"Coluna de pressão '{pressure_column}' não encontrada. Colunas: {reader.fieldnames}")
+                raise ValueError(
+                    f"Coluna de pressão '{pressure_column}' não encontrada. Colunas: {reader.fieldnames}"
+                )
 
             for row in reader:
                 t = safe_float(row.get(time_column, ""))
@@ -150,7 +155,9 @@ class FlightSimulation:
                 raw_rows.append((t, pressure_pa, altitude_m_raw))
 
         if len(raw_rows) < 2:
-            raise ValueError("CSV precisa ter pelo menos 2 amostras válidas de tempo/pressão.")
+            raise ValueError(
+                "CSV precisa ter pelo menos 2 amostras válidas de tempo/pressão."
+            )
 
         # Zera somente a curva de altitude do arquivo pela média das 10 primeiras altitudes.
         # A pressão enviada ao micro continua sendo a pressão real do CSV.
@@ -224,16 +231,32 @@ class URDPacketParser:
     NAN = float("nan")
 
     LIST = [
-        "linha", "tempo", "phase", "latitude", "longitude", "hora", "minuto", "precisao",
-        "altitude", "sd", "apogeu_h", "apogeu_t",
-        "pqd_dn", "pqd_db", "pqd_mn", "pqd_mb",
-        "temp", "roll", "pitch", "yaw",
+        "linha",
+        "tempo",
+        "phase",
+        "latitude",
+        "longitude",
+        "hora",
+        "minuto",
+        "precisao",
+        "altitude",
+        "sd",
+        "apogeu_h",
+        "apogeu_t",
+        "pqd_dn",
+        "pqd_db",
+        "pqd_mn",
+        "pqd_mb",
+        "temp",
+        "roll",
+        "pitch",
+        "yaw",
     ]
 
     TAG = {
         "L": "linha",
         "T": "tempo",
-        "p": "phase",      # flight state
+        "p": "phase",  # flight state
         "A": "latitude",
         "O": "longitude",
         "h": "hora",
@@ -241,15 +264,15 @@ class URDPacketParser:
         "g": "precisao",
         "H": "altitude",
         "s": "sd",
-        "a": "apogeu_h",   # apogeu continua usando chave a
+        "a": "apogeu_h",  # apogeu continua usando chave a
         "t": "apogeu_t",
         "D": "pqd_dn",
         "d": "pqd_db",
-        "M": "pqd_mn",     # Main nominal
-        "m": "pqd_mb",     # Main backup
+        "M": "pqd_mn",  # Main nominal
+        "m": "pqd_mb",  # Main backup
         "c": "temp",
         "R": "roll",
-        "P": "pitch",      # P permanece pitch
+        "P": "pitch",  # P permanece pitch
         "Y": "yaw",
     }
 
@@ -377,7 +400,9 @@ class URDSerialHandler(QThread):
 
         try:
             self.status.emit(f"Abrindo {self.port}...", "#d4a017")
-            self._ser = serial.Serial(self.port, self.baud, timeout=0.02, write_timeout=0.5)
+            self._ser = serial.Serial(
+                self.port, self.baud, timeout=0.02, write_timeout=0.5
+            )
             self._safe_reset_buffers()
             self.connected.emit()
 
@@ -497,8 +522,12 @@ class URDSerialHandler(QThread):
         # Se a UI refizesse READY sozinha, ela poderia quebrar esse fluxo.
         self._last_rx_mono = now
         self.timeout_detected.emit(elapsed)
-        self.status.emit(f"Timeout serial ({elapsed:.2f}s). Sem reconexão automática.", "#d4a017")
-        self.log.emit(f"[TIMEOUT] Sem dados por {elapsed:.2f}s. Reconexão automática desativada.")
+        self.status.emit(
+            f"Timeout serial ({elapsed:.2f}s). Sem reconexão automática.", "#d4a017"
+        )
+        self.log.emit(
+            f"[TIMEOUT] Sem dados por {elapsed:.2f}s. Reconexão automática desativada."
+        )
 
     def _read_available_line(self):
         if not self._ser or not self._ser.is_open:
@@ -677,12 +706,16 @@ class SimulationConfigDialog(QDialog):
         return w
 
     def _pick_input(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Selecionar CSV", "", "CSV (*.csv);;Todos (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Selecionar CSV", "", "CSV (*.csv);;Todos (*)"
+        )
         if path:
             self.ed_input.setText(path)
 
     def _pick_output(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Selecionar log", "", "CSV (*.csv);;Texto (*.txt);;Todos (*)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Selecionar log", "", "CSV (*.csv);;Texto (*.txt);;Todos (*)"
+        )
         if path:
             self.ed_log_output.setText(path)
 
@@ -726,7 +759,6 @@ class SimulationConfigDialog(QDialog):
 # ============================================================
 
 
-
 class MetricBox(QFrame):
     """
     Pequena caixa reutilizável para valores de monitoramento.
@@ -734,6 +766,7 @@ class MetricBox(QFrame):
     Ela aceita setText(...) para ser compatível com QLabel no resto do código,
     mas visualmente separa título e valor.
     """
+
     def __init__(self, title: str, value: str = "--", parent=None):
         super().__init__(parent)
         self._ok = False
@@ -797,6 +830,7 @@ class MetricBox(QFrame):
                 background: transparent;
             }}
         """)
+
 
 class URDSimulatorPage(QWidget):
     def __init__(self, parent=None):
@@ -877,9 +911,15 @@ class URDSimulatorPage(QWidget):
         self.plot.setLabel("left", "Altitude", units="m")
         self.plot.addLegend(offset=(10, 10))
 
-        self.curve_sim = self.plot.plot([], [], pen=pg.mkPen("#17a2ff", width=2), name="Altura simulador")
-        self.curve_micro = self.plot.plot([], [], pen=pg.mkPen("#ffb347", width=2), name="Altura micro")
-        self.scatter_events = pg.ScatterPlotItem(size=11, brush=pg.mkBrush("#ff3355"), pen=pg.mkPen("#ffffff", width=1))
+        self.curve_sim = self.plot.plot(
+            [], [], pen=pg.mkPen("#17a2ff", width=2), name="Altura simulador"
+        )
+        self.curve_micro = self.plot.plot(
+            [], [], pen=pg.mkPen("#ffb347", width=2), name="Altura micro"
+        )
+        self.scatter_events = pg.ScatterPlotItem(
+            size=11, brush=pg.mkBrush("#ff3355"), pen=pg.mkPen("#ffffff", width=1)
+        )
         self.plot.addItem(self.scatter_events)
 
         self.plot.setMinimumHeight(330)
@@ -974,7 +1014,10 @@ class URDSimulatorPage(QWidget):
         self.combo_ports.setEditable(True)
         self.combo_ports.setMinimumWidth(130)
         self.combo_ports.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.combo_ports.mousePressEvent = lambda ev: (self._refresh_ports(), QComboBox.mousePressEvent(self.combo_ports, ev))
+        self.combo_ports.mousePressEvent = lambda ev: (
+            self._refresh_ports(),
+            QComboBox.mousePressEvent(self.combo_ports, ev),
+        )
         row.addWidget(self.combo_ports, stretch=1)
 
         self.btn_connect = QPushButton("Conectar", self)
@@ -1053,7 +1096,9 @@ class URDSimulatorPage(QWidget):
 
         self.lbl_status = QLabel("Desconectado", self)
         self.lbl_status.setAlignment(Qt.AlignCenter)
-        self.lbl_status.setStyleSheet("color:#666; font-weight:600; padding:4px; border-top:1px solid #4a4a4a;")
+        self.lbl_status.setStyleSheet(
+            "color:#666; font-weight:600; padding:4px; border-top:1px solid #4a4a4a;"
+        )
         status_lay.addWidget(self.lbl_status)
 
         term_layout.addWidget(status_box)
@@ -1075,7 +1120,9 @@ class URDSimulatorPage(QWidget):
         self.lbl_file = MetricBox("Arquivo CSV", "Nenhum", self)
         self.lbl_pressure = MetricBox("Pressão enviada", "-- Pa", self)
         self.lbl_alt_sim = MetricBox("Altura do simulador", "-- m", self)
-        self.lbl_timeout = MetricBox("Timeout serial", f"{self.cfg['timeout_s']:.2f} s", self)
+        self.lbl_timeout = MetricBox(
+            "Timeout serial", f"{self.cfg['timeout_s']:.2f} s", self
+        )
 
         sim_grid.addWidget(self.lbl_file, 0, 0, 1, 2)
         sim_grid.addWidget(self.lbl_pressure, 1, 0)
@@ -1125,15 +1172,20 @@ class URDSimulatorPage(QWidget):
         return values_group
 
     def _refresh_ports(self):
-        current = self.combo_ports.currentText().strip() if hasattr(self, "combo_ports") else ""
+        current = (
+            self.combo_ports.currentText().strip()
+            if hasattr(self, "combo_ports")
+            else ""
+        )
         self.combo_ports.clear()
-
         ports = []
         for p in serial.tools.list_ports.comports():
             desc = (p.description or "").lower()
+            device = p.device
             if "bluetooth" in desc:
                 continue
-            ports.append(p.device)
+
+            ports.append(device)
 
         self.combo_ports.addItems(ports)
         if current and current not in ports:
@@ -1224,7 +1276,14 @@ class URDSimulatorPage(QWidget):
         }
         button.setStyleSheet(styles.get(state, ""))
 
-    def _blink_button(self, button: QPushButton, flash_state: str, final_state: str, pulses: int = 4, interval_ms: int = 120):
+    def _blink_button(
+        self,
+        button: QPushButton,
+        flash_state: str,
+        final_state: str,
+        pulses: int = 4,
+        interval_ms: int = 120,
+    ):
         """Pisca um botão alternando entre flash_state e final_state."""
         counter = {"i": 0}
 
@@ -1232,7 +1291,9 @@ class URDSimulatorPage(QWidget):
             if counter["i"] >= pulses:
                 self._set_button_visual(button, final_state)
                 return
-            self._set_button_visual(button, flash_state if counter["i"] % 2 == 0 else final_state)
+            self._set_button_visual(
+                button, flash_state if counter["i"] % 2 == 0 else final_state
+            )
             counter["i"] += 1
             QTimer.singleShot(interval_ms, step)
 
@@ -1242,7 +1303,9 @@ class URDSimulatorPage(QWidget):
         has_sim = self.simulation is not None
         self.btn_connect.setEnabled(not self.connected_ok)
         self.btn_disconnect.setEnabled(self.connected_ok)
-        self.btn_start.setEnabled(self.connected_ok and has_sim and not self.simulation_started)
+        self.btn_start.setEnabled(
+            self.connected_ok and has_sim and not self.simulation_started
+        )
         self.btn_stop.setEnabled(self.simulation_started)
 
         if self.simulation_started:
@@ -1288,9 +1351,13 @@ class URDSimulatorPage(QWidget):
             self._update_buttons()
             return
 
-        self.lbl_file.setText(f"{Path(self.cfg['input_path']).name} | {len(self.simulation.samples)} amostras")
+        self.lbl_file.setText(
+            f"{Path(self.cfg['input_path']).name} | {len(self.simulation.samples)} amostras"
+        )
         self._append_terminal(f"[CSV] Carregado: {self.cfg['input_path']}")
-        self._append_terminal(f"[CSV] Duração: {self.simulation.duration_s:.2f}s | Amostras: {len(self.simulation.samples)}")
+        self._append_terminal(
+            f"[CSV] Duração: {self.simulation.duration_s:.2f}s | Amostras: {len(self.simulation.samples)}"
+        )
         self._update_buttons()
 
     # ---------- Serial ----------
@@ -1304,13 +1371,17 @@ class URDSimulatorPage(QWidget):
         self._disconnect_serial(silent=True)
 
         timeout_s = float(self.cfg.get("timeout_s", 1.0))
-        self.serial_handler = URDSerialHandler(port=port, baud=115200, timeout_s=timeout_s, parent=self)
+        self.serial_handler = URDSerialHandler(
+            port=port, baud=115200, timeout_s=timeout_s, parent=self
+        )
         self.serial_handler.log.connect(self._append_terminal)
         self.serial_handler.status.connect(self._set_status)
         self.serial_handler.handshake_ok.connect(self._on_handshake_ok)
         self.serial_handler.disconnected.connect(self._on_serial_disconnected)
         self.serial_handler.timeout_detected.connect(self._on_serial_timeout)
-        self.serial_handler.simulation_started.connect(self._on_micro_simulation_started)
+        self.serial_handler.simulation_started.connect(
+            self._on_micro_simulation_started
+        )
         self.serial_handler.simulation_recovered.connect(self._on_micro_recovered)
         self.serial_handler.packet_received.connect(self._on_packet_received)
         self.serial_handler.error.connect(self._on_serial_error)
@@ -1335,7 +1406,9 @@ class URDSimulatorPage(QWidget):
     def _on_handshake_ok(self):
         self.connected_ok = True
         self._set_serial_status("connected")
-        self._append_terminal("[UI] Handshake concluído. UI pronta para iniciar simulação.")
+        self._append_terminal(
+            "[UI] Handshake concluído. UI pronta para iniciar simulação."
+        )
         self._update_buttons()
 
     def _on_serial_disconnected(self):
@@ -1349,7 +1422,9 @@ class URDSimulatorPage(QWidget):
 
     def _on_serial_timeout(self, elapsed: float):
         self._set_serial_status("timeout")
-        self._append_terminal("[UI] Timeout detectado. Reconexão automática desativada.")
+        self._append_terminal(
+            "[UI] Timeout detectado. Reconexão automática desativada."
+        )
 
     def _on_micro_recovered(self):
         # Mantido apenas por compatibilidade com versões antigas do handler.
@@ -1359,11 +1434,15 @@ class URDSimulatorPage(QWidget):
 
     def _start_simulation(self):
         if not self.serial_handler or not self.connected_ok:
-            QMessageBox.warning(self, "Simulação", "Conecte na serial antes de iniciar.")
+            QMessageBox.warning(
+                self, "Simulação", "Conecte na serial antes de iniciar."
+            )
             return
 
         if not self.simulation:
-            QMessageBox.warning(self, "Simulação", "Carregue um CSV de simulação antes de iniciar.")
+            QMessageBox.warning(
+                self, "Simulação", "Carregue um CSV de simulação antes de iniciar."
+            )
             return
 
         self._reset_plot_data()
@@ -1371,7 +1450,11 @@ class URDSimulatorPage(QWidget):
         self.paused_by_timeout = False
         # T0_micro é capturado ao clicar em iniciar se já existir um T válido.
         # Caso contrário, o primeiro T válido recebido após STARTED vira o T0_micro.
-        self.t0_micro = self.last_micro_time_raw if self._is_valid_number(self.last_micro_time_raw) else None
+        self.t0_micro = (
+            self.last_micro_time_raw
+            if self._is_valid_number(self.last_micro_time_raw)
+            else None
+        )
         self.serial_handler.request_start_simulation()
         self._blink_button(self.btn_start, "start_flash", "start_idle", pulses=4)
         self._set_status("Solicitando STARTED...", "#d4a017")
@@ -1451,7 +1534,13 @@ class URDSimulatorPage(QWidget):
         self.curve_micro.setData([], [])
         self.scatter_events.setData([])
 
-        for event_box in [self.lbl_apogee, self.lbl_drogue_n, self.lbl_drogue_b, self.lbl_main_n, self.lbl_main_b]:
+        for event_box in [
+            self.lbl_apogee,
+            self.lbl_drogue_n,
+            self.lbl_drogue_b,
+            self.lbl_main_n,
+            self.lbl_main_b,
+        ]:
             event_box.setText("--")
             if hasattr(event_box, "set_state"):
                 event_box.set_state("idle")
@@ -1473,13 +1562,19 @@ class URDSimulatorPage(QWidget):
             self.last_micro_time_raw = micro_time
             if self.simulation_started and self.t0_micro is None:
                 self.t0_micro = micro_time
-                self._append_terminal(f"[UI] T0_micro definido pelo primeiro T válido após STARTED: {self.t0_micro:.2f}s")
+                self._append_terminal(
+                    f"[UI] T0_micro definido pelo primeiro T válido após STARTED: {self.t0_micro:.2f}s"
+                )
             if self.t0_micro is not None:
                 micro_time_rel = micro_time - self.t0_micro
 
         if self._is_valid_number(micro_alt):
             self.last_micro_altitude = micro_alt
-            x = micro_time_rel if self._is_valid_number(micro_time_rel) else self._current_elapsed_s()
+            x = (
+                micro_time_rel
+                if self._is_valid_number(micro_time_rel)
+                else self._current_elapsed_s()
+            )
             self.x_micro.append(x)
             self.y_micro.append(micro_alt)
             self.curve_micro.setData(self.x_micro, self.y_micro)
@@ -1531,7 +1626,11 @@ class URDSimulatorPage(QWidget):
 
             self.detected_events.add(key)
             x = self.x_micro[-1] if self.x_micro else self._current_elapsed_s()
-            y = self.last_micro_altitude if self._is_valid_number(self.last_micro_altitude) else self.last_sim_altitude
+            y = (
+                self.last_micro_altitude
+                if self._is_valid_number(self.last_micro_altitude)
+                else self.last_sim_altitude
+            )
 
             self.event_points.append({"pos": (x, y), "data": name})
             self.scatter_events.setData(self.event_points)
@@ -1541,7 +1640,9 @@ class URDSimulatorPage(QWidget):
             self._append_terminal(f"[EVENTO] {name}: {value:.2f} m em t={x:.2f}s")
 
     def _update_delta_label(self):
-        if self._is_valid_number(self.last_micro_altitude) and self._is_valid_number(self.last_sim_altitude):
+        if self._is_valid_number(self.last_micro_altitude) and self._is_valid_number(
+            self.last_sim_altitude
+        ):
             delta = self.last_micro_altitude - self.last_sim_altitude
             self.lbl_delta.setText(f"{delta:.2f} m")
             if hasattr(self.lbl_delta, "set_state"):
@@ -1562,7 +1663,6 @@ class URDSimulatorPage(QWidget):
             return math.isfinite(float(value))
         except Exception:
             return False
-
 
     def _reset_page(self):
         self.simulation_started = False
@@ -1591,7 +1691,9 @@ class URDSimulatorPage(QWidget):
         self.lbl_phase.set_state("idle")
         self.lbl_serial_packets.setText("0/19")
         self._set_serial_status("connected" if self.connected_ok else "idle")
-        self._set_status("Página resetada" if self.connected_ok else "Desconectado", "#666")
+        self._set_status(
+            "Página resetada" if self.connected_ok else "Desconectado", "#666"
+        )
         self._update_buttons()
 
     # ---------- Log opcional ----------
@@ -1614,7 +1716,11 @@ class URDSimulatorPage(QWidget):
             return
 
         alt_micro = self.last_micro_altitude
-        delta = alt_micro - self.last_sim_altitude if self._is_valid_number(alt_micro) else float("nan")
+        delta = (
+            alt_micro - self.last_sim_altitude
+            if self._is_valid_number(alt_micro)
+            else float("nan")
+        )
         self.log_file.write(
             f"{elapsed_s:.4f},{self.last_pressure_pa:.4f},{self.last_sim_altitude:.4f},{alt_micro:.4f},{delta:.4f}\n"
         )
@@ -1632,5 +1738,3 @@ class URDSimulatorPage(QWidget):
         self._stop_simulation()
         self._disconnect_serial(silent=True)
         super().closeEvent(event)
-
-

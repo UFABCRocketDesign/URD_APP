@@ -1,52 +1,48 @@
 # views/gs_flight_single.py
 from __future__ import annotations
+
 import math
-from typing import Optional, Tuple, List
-import sys
-import platform
-
-from PySide6.QtCore import Qt, QTimer, Slot, Signal
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QGridLayout,
-    QSplitter,
-    QFrame,
-    QLabel,
-    QPushButton,
-    QPlainTextEdit,
-    QCheckBox,
-    QGroupBox,
-    QSizePolicy,
-    QMessageBox,
-    QComboBox,
-    QStackedLayout,
-    QFileDialog,
-    QProgressDialog,
-    QApplication,
-    QDialog,
-)
-
-from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen
-
 import os
-import serial
-import serial.tools.list_ports
-import pyqtgraph.opengl as gl
-import numpy as np
+import platform
+import re
+import sys
 import time
 from dataclasses import dataclass, field
-import pyqtgraph as pg
-import math
-import re
+from typing import List, Optional, Tuple
 
-from views.net_manager import NetManager
+import numpy as np
+import pyqtgraph as pg
+import pyqtgraph.opengl as gl
+import serial
+import serial.tools.list_ports
+from PySide6.QtCore import Qt, QTimer, Slot, Signal
+from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressDialog,
+    QPushButton,
+    QSizePolicy,
+    QSplitter,
+    QStackedLayout,
+    QVBoxLayout,
+    QWidget,
+)
 from views.config_dialog import ConfigDialog
-from views.map_widget import MapWidget
-from views.rocket_3d import Rocket3DView
 from views.logger import Logger
+from views.map_widget import MapWidget
+from views.net_manager import NetManager
+from views.rocket_3d import Rocket3DView
 
 
 def get_os_info():
@@ -164,21 +160,16 @@ class GSFlightSinglePage(QWidget):
         self._last_beep_ts = 0.0
         self._beep_mode = None  # "gpio", "winsound" ou None
 
-        if self.is_linux:
+        try:
+            import winsound
+            self._beep_mode = "winsound"
+        except ImportError:
             try:
                 from gpiozero import Buzzer
-
                 self._buzzer = Buzzer(6)  # GPIO 6 no Raspberry
                 self._beep_mode = "gpio"
             except Exception:
                 self._buzzer = None
-                self._beep_mode = None
-        else:
-            try:
-                import winsound
-
-                self._beep_mode = "winsound"
-            except Exception:
                 self._beep_mode = None
 
         self.logger = None
@@ -216,6 +207,8 @@ class GSFlightSinglePage(QWidget):
         # self._sim = QTimer(self)
         # self._sim.timeout.connect(self._feed_fake)
         # self._sim.start(200)
+
+        self.refresh_ports()
 
     # =========================
     # Metodo para desligar pagina
@@ -453,8 +446,13 @@ class GSFlightSinglePage(QWidget):
         self.lbl_serial_packets.setStyleSheet("font-size:10px;")
         serial_row.addWidget(self.lbl_serial_packets)
 
+        self.lbl_lora_config = QLabel("FREQ: — | ADDR: —")
+        self.lbl_lora_config.setAlignment(Qt.AlignCenter)
+        self.lbl_lora_config.setStyleSheet("font-size:10px; font-weight:bold; color: #888;")
+
         serial_layout.addWidget(self.lbl_serial_title)
         serial_layout.addLayout(serial_row)
+        serial_layout.addWidget(self.lbl_lora_config)
 
         # =========================
         # LAYOUT FINAL DA LINHA
@@ -859,6 +857,63 @@ class GSFlightSinglePage(QWidget):
         for i in range(4):
             self._set_pq(i, 0.0)
 
+        self.current_lora_freq = "—"
+        self.current_lora_addr = "—"
+        self._update_lora_display()
+
+    def _update_lora_display(self):
+        if hasattr(self, "lbl_lora_config"):
+            self.lbl_lora_config.setText(f"FREQ: {self.current_lora_freq} | ADDR: {self.current_lora_addr}")
+
+    def _parse_lora_info_from_line(self, line: str):
+        if not line:
+            return
+        m = re.search(r"Frequency:\s*(\d+)\s*MHz,\s*ADDH=(?:0x)?([0-9A-Fa-f]+),\s*ADDL=(?:0x)?([0-9A-Fa-f]+)", line, re.IGNORECASE)
+        if m:
+            chan = int(m.group(1))
+            addh = int(m.group(2), 16)
+            addl = int(m.group(3), 16)
+            freq_mhz = 862 + chan
+            addr_hex = f"{(addh << 8) | addl:04X}"
+            self.current_lora_freq = f"{freq_mhz} MHz (CHAN {chan})"
+            self.current_lora_addr = f"0x{addr_hex}"
+            if hasattr(self, "current_channel_hex"):
+                self.current_channel_hex = str(chan)
+            if hasattr(self, "current_address_hex"):
+                self.current_address_hex = addr_hex
+            self._update_lora_display()
+            return
+
+        m = re.search(r"CHAN=(\d+),\s*ADDH DEC=(\d+),\s*ADDL DEC=(\d+)", line, re.IGNORECASE)
+        if m:
+            chan = int(m.group(1))
+            addh = int(m.group(2))
+            addl = int(m.group(3))
+            freq_mhz = 862 + chan
+            addr_hex = f"{(addh << 8) | addl:04X}"
+            self.current_lora_freq = f"{freq_mhz} MHz (CHAN {chan})"
+            self.current_lora_addr = f"0x{addr_hex}"
+            if hasattr(self, "current_channel_hex"):
+                self.current_channel_hex = str(chan)
+            if hasattr(self, "current_address_hex"):
+                self.current_address_hex = addr_hex
+            self._update_lora_display()
+            return
+
+        m = re.search(r"(?:CH4N|CHAN)(\d+)_([0-9A-Fa-f]{4})", line, re.IGNORECASE)
+        if m:
+            chan = int(m.group(1))
+            addr_hex = m.group(2).upper()
+            freq_mhz = 862 + chan
+            self.current_lora_freq = f"{freq_mhz} MHz (CHAN {chan})"
+            self.current_lora_addr = f"0x{addr_hex}"
+            if hasattr(self, "current_channel_hex"):
+                self.current_channel_hex = str(chan)
+            if hasattr(self, "current_address_hex"):
+                self.current_address_hex = addr_hex
+            self._update_lora_display()
+            return
+
     # ------------------ API pública ------------------
     NAN = float("nan")
 
@@ -1052,6 +1107,7 @@ class GSFlightSinglePage(QWidget):
             "s": "sd",
             "a": "apogeu_h",
             "t": "apogeu_t",
+
             "D": "pqd_dn",
             "d": "pqd_db",
             "M": "pqd_mn",
@@ -1081,7 +1137,6 @@ class GSFlightSinglePage(QWidget):
         used_keys = set()
 
         for key_txt, value_txt in tokens:
-
             key_txt = key_txt.strip()
 
             key = TAG.get(key_txt)
@@ -1114,6 +1169,8 @@ class GSFlightSinglePage(QWidget):
 
         # marcou que recebeu algo (para watchdog)
         self._last_rx_time = time.time()
+
+        self._parse_lora_info_from_line(line)
 
         parsed = self._parse_packet(line)
 
@@ -1275,14 +1332,11 @@ class GSFlightSinglePage(QWidget):
 
         # SD
         if self._is_ok(sd):
-            if sd == 1.0:
-                self.sd_box.setStyleSheet(
-                    "background: green; border: 1px solid #ccc; border-radius: 6px;"
-                )
-            else:
-                self.sd_box.setStyleSheet(
-                    "background: red; border: 1px solid #ccc; border-radius: 6px;"
-                )
+            self.sd_box.setStyleSheet(
+                "background: green; border: 1px solid #ccc; border-radius: 6px;"
+                if sd == 1
+                else "background: red; border: 1px solid #ccc; border-radius: 6px;"
+            )
 
         # Paraquedas
         if self._is_ok(pqd_dn):
@@ -1383,32 +1437,18 @@ class GSFlightSinglePage(QWidget):
 
         style = f"background: {color}; border: 1px solid {border}; border-radius: 8px;"
 
-        if sys.platform.startswith("linux"):
-            if idx == 0:
-                self.drogueN_text.setText(f"Normal: {height:.2f} m")
-                self.pqd_drogueN.setStyleSheet(style)
-            elif idx == 1:
-                self.drogueB_text.setText(f"Backup: {height:.2f} m")
-                self.pqd_drogueB.setStyleSheet(style)
-            elif idx == 2:
-                self.mainN_text.setText(f"Normal: {height:.2f} m")
-                self.pqd_mainN.setStyleSheet(style)
-            elif idx == 3:
-                self.mainB_text.setText(f"Backup: {height:.2f} m")
-                self.pqd_mainB.setStyleSheet(style)
-        else:
-            if idx == 0:
-                self.drogueN_text.setText(f"Normal: {height:.2f} m")
-                self.pqd_drogueN.setStyleSheet(style)
-            elif idx == 1:
-                self.drogueB_text.setText(f"Backup: {height:.2f} m")
-                self.pqd_drogueB.setStyleSheet(style)
-            elif idx == 2:
-                self.mainN_text.setText(f"Normal: {height:.2f} m")
-                self.pqd_mainN.setStyleSheet(style)
-            elif idx == 3:
-                self.mainB_text.setText(f"Backup: {height:.2f} m")
-                self.pqd_mainB.setStyleSheet(style)
+        if idx == 0:
+            self.drogueN_text.setText(f"Normal: {height:.2f} m")
+            self.pqd_drogueN.setStyleSheet(style)
+        elif idx == 1:
+            self.drogueB_text.setText(f"Backup: {height:.2f} m")
+            self.pqd_drogueB.setStyleSheet(style)
+        elif idx == 2:
+            self.mainN_text.setText(f"Normal: {height:.2f} m")
+            self.pqd_mainN.setStyleSheet(style)
+        elif idx == 3:
+            self.mainB_text.setText(f"Backup: {height:.2f} m")
+            self.pqd_mainB.setStyleSheet(style)
 
     def _open_config_dialog(self):
         dlg = ConfigDialog(self, parent=self)
@@ -1442,7 +1482,7 @@ class GSFlightSinglePage(QWidget):
 
         line = (
             f"{self._sim_t:.2f}\t{self._sim_lat:.6f}\t{self._sim_lon:.6f}\t{apogee:.2f}\t{alt:.2f}\t"
-            f"{alt:.2f}\t{p1t:.2f}\t{alt-10:.2f}\t{p2t:.2f}\t0\t0"
+            f"{alt:.2f}\t{p1t:.2f}\t{alt - 10:.2f}\t{p2t:.2f}\t0\t0"
         )
         self.feed_line(line)
 
@@ -1512,24 +1552,12 @@ class GSFlightSinglePage(QWidget):
         self.combo_ports.clear()
 
         for port in serial.tools.list_ports.comports():
-            desc = port.description.lower()
-            device = port.device
-
-            if "bluetooth" in desc:  # ignora portas BT
-                continue
-
-            if device in ["COM3", "COM4"]:  # ignora portas padrão
-                continue
-
-            # if self.is_linux:
-            #     if not any(x in device for x in ["ttyS", "ttyAMA", "ttyUSB", "ttyACM"]):
-            #         continue
-
-            self.combo_ports.addItem(device)
+            self.combo_ports.addItem(port.device)
 
         # se não achar nenhuma porta
         if self.combo_ports.count() == 0:
             self.combo_ports.addItem("")  # placeholder vazio
+
 
     def connect_serial(self):
         """Conecta na porta escolhida e faz handshake com READY / GPS_COORDS."""
@@ -1646,13 +1674,6 @@ class GSFlightSinglePage(QWidget):
                         "Localização obtida do GPS",
                         f"Lat: {lat:.6f}, Lon: {lon:.6f}",
                     )
-                # else:
-                # Sem coordenadas validas mas com conexao ok nao gera mais popup
-                # QMessageBox.warning(
-                #     self,
-                #     "GPS",
-                #     "Não foi possível obter coordenadas válidas no tempo limite.\nSerial conectada com sucesso!"
-                # )
 
                 # 5) drena rapidamente o que restou do handshake/header
                 self._drain_serial_input(seconds=0.40)
@@ -1769,30 +1790,6 @@ class GSFlightSinglePage(QWidget):
 
         self._force_disconnect_serial(reason="Desconectado", send_rst=True)
 
-    # def disconnect_serial(self):
-    #     """Desconecta, envia RST e pisca vermelho."""
-    #     if self.ser and self.ser.is_open:
-    #         try:
-    #             self._set_status("Desconectado", "#666")        # cinza neutro
-    #             self.ser.write(b"RST\n")  # pede reset no ESP
-    #             self.timer_serial.stop()
-    #             self.ser.close()
-    #             self.ser = None
-    #             self.connected_ok = False
-    #             self.lbl_serial_packets.setText("0/19")
-
-    #             # pisca vermelho
-    #             self.btn_disconnect.setStyleSheet("background:#f8d7da; font-weight:600;")
-    #             QTimer.singleShot(500, self._reset_button_styles)
-
-    #         except Exception as e:
-    #             self._set_status("Erro: Falha ao desconectar", "#b00") # vermelho
-    #             QMessageBox.warning(self, "Erro", f"Falha ao desconectar:\n{e}")
-    #             self._reset_button_styles()
-    #     else:
-    #         QMessageBox.information(self, "Serial", "Nenhuma porta estava conectada")
-    #         self._reset_button_styles()
-
     def _readline_decoded(self) -> str:
         if not (self.ser and self.ser.is_open):
             return ""
@@ -1870,6 +1867,8 @@ class GSFlightSinglePage(QWidget):
         """
         if not line:
             return
+
+        self._parse_lora_info_from_line(line)
 
         if self._is_boot_noise_line(line):
             return
@@ -2056,7 +2055,7 @@ class GSFlightSinglePage(QWidget):
         # Limpa os dados do gráfico
         self.series_t.clear()
         self.series_alt.clear()
-
+        
         # Limpa a curva visual
         self.alt_curve.setData([], [])
 
@@ -2066,6 +2065,17 @@ class GSFlightSinglePage(QWidget):
 
         # Como não há mais dois pontos, a velocidade atual deixa de existir
         self.lbl_vel.setText("—")
+
+        if hasattr(self, "alt_x"):
+            self.alt_x.clear()
+        if hasattr(self, "alt_y"):
+            self.alt_y.clear()
+        if hasattr(self, "alt_data"):
+            self.alt_data.clear()
+        if hasattr(self, "plot_time"):
+            self.plot_time.clear()
+        if hasattr(self, "plot_alt"):
+            self.plot_alt.clear()
 
     # Net
     def onNetChanged(self, status: bool):

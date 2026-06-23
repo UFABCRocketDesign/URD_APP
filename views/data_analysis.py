@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QFileDialog, QLabel,
     QGridLayout, QGroupBox, QCheckBox, QMessageBox, QHBoxLayout,
-    QDialog, QFormLayout, QDialogButtonBox, QLineEdit, QInputDialog, QComboBox
+    QDialog, QFormLayout, QDialogButtonBox, QLineEdit, QInputDialog, QComboBox,
+    QListWidget, QDoubleSpinBox, QScrollArea
 )
 from PySide6.QtGui import (QCursor)
 
@@ -24,6 +25,7 @@ class DataAnalysisPage(QWidget):
         self.page_choice = None
         self.page_flight = None
         self.page_te = None
+        self.page_post_process = None
 
         self.show_choice_page()
 
@@ -86,9 +88,31 @@ class DataAnalysisPage(QWidget):
         te_block.setMaximumHeight(90)
         lay.addWidget(te_block)
 
+        # --- Bloco Pós-Processamento ---
+        pp_block = QWidget()
+        pp_layout = QVBoxLayout(pp_block)
+        pp_layout.setContentsMargins(0, 0, 0, 0)
+        pp_layout.setSpacing(2)
+
+        btn_pp = QPushButton("Pós-Processamento de Dados")
+        btn_pp.setMinimumHeight(60)
+        pp_layout.addWidget(btn_pp)
+
+        lbl_pp = QLabel(
+            "Recorte o período de voo (com margem de segurança) e concatene múltiplos "
+            "arquivos decorrentes de reinicialização do computador de bordo durante o voo."
+        )
+        lbl_pp.setStyleSheet("font-size: 9pt; color: gray;")
+        lbl_pp.setMaximumHeight(30)
+        pp_layout.addWidget(lbl_pp)
+
+        pp_block.setMaximumHeight(90)
+        lay.addWidget(pp_block)
+
         # Conectar
         btn_flight.clicked.connect(self.show_flight_page)
         btn_te.clicked.connect(self.show_te_page)
+        btn_pp.clicked.connect(self.show_post_process_page)
 
         self.main_layout.addWidget(self.page_choice)
 
@@ -111,6 +135,15 @@ class DataAnalysisPage(QWidget):
         btn_back.clicked.connect(self.show_choice_page)
         self.main_layout.addWidget(btn_back)
         self.main_layout.addWidget(self.page_te)
+
+    # ---------------- Post-Processing ----------------
+    def show_post_process_page(self):
+        self.clear_layout(self.main_layout)
+        self.page_post_process = PostProcessingPage()
+        btn_back = QPushButton("← Voltar")
+        btn_back.clicked.connect(self.show_choice_page)
+        self.main_layout.addWidget(btn_back)
+        self.main_layout.addWidget(self.page_post_process)
 
     # ---------------- Utils ----------------
     def clear_layout(self, layout):
@@ -185,7 +218,93 @@ class FlightAnalysisPage(QWidget):
         if not path:
             return
         try:
-            self.df = pd.read_csv(path, sep="\t")
+            skiprows = None
+            header_keywords = ["tempo_s", "tempo.s", "time_s", "time"]
+            
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                for i in range(5):
+                    line = f.readline()
+                    if not line:
+                        break
+                    line_lower = line.lower()
+                    if any(k in line_lower for k in header_keywords):
+                        skiprows = i
+                        break
+
+            if skiprows is not None:
+                df = pd.read_csv(path, sep="\t", skiprows=skiprows, index_col=False, on_bad_lines="skip")
+            else:
+                df = pd.read_csv(path, sep="\t", header=None, index_col=False, on_bad_lines="skip")
+                default_names = [
+                    "tempo.s", "mps2.x.accel", "mps2.y.accel", "mps2.z.accel",
+                    "dps.x.gyros", "dps.y.gyros", "dps.z.gyros",
+                    "uT.x.magn", "uT.y.magn", "uT.z.magn",
+                    "c.baro", "pa.baro", "m.h.baro",
+                    "lat.GPS", "lon.GPS", "m.h.GPS", "mps.GPS", "sat.GPS", "prec.GPS"
+                ]
+                col_mapping = {i: name for i, name in enumerate(default_names)}
+                df = df.rename(columns=col_mapping)
+
+            df.columns = [str(c).strip() for c in df.columns]
+            for col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+            mapping = {
+                "tempo.s": "tempo_s",
+                "time_s": "tempo_s",
+                "c.baro": "temp_C",
+                "baro_temp_c": "temp_C",
+                "pa.baro": "pressao_Pa",
+                "baro_press_pa": "pressao_Pa",
+                "m.h.baro": "alt_m",
+                "baro.h.m": "alt_m",
+                "alt_m": "alt_m",
+                "temperatura": "temp_C",
+                "dps.x.gyros": "gyroX_dps",
+                "dps.y.gyros": "gyroY_dps",
+                "dps.z.gyros": "gyroZ_dps",
+                "gx": "gyroX_dps",
+                "gy": "gyroY_dps",
+                "gz": "gyroZ_dps",
+                "uT.x.magn": "magX_uT",
+                "uT.y.magn": "magY_uT",
+                "uT.z.magn": "magZ_uT",
+                "mx": "magX_uT",
+                "my": "magY_uT",
+                "mz": "magZ_uT",
+                "lat.GPS": "lat_deg",
+                "lat_deg": "lat_deg",
+                "lon.GPS": "lon_deg",
+                "lon_deg": "lon_deg",
+                "m.h.GPS": "alt_gps_m",
+                "gps_alt_m": "alt_gps_m",
+                "gps_speed_kmph": "vel_kmph"
+            }
+            df = df.rename(columns=mapping)
+
+            if "mps2.x.accel" in df.columns:
+                df["accX_g"] = df["mps2.x.accel"] / 9.80665
+            if "mps2.y.accel" in df.columns:
+                df["accY_g"] = df["mps2.y.accel"] / 9.80665
+            if "mps2.z.accel" in df.columns:
+                df["accZ_g"] = df["mps2.z.accel"] / 9.80665
+
+            if "ax" in df.columns:
+                df["accX_g"] = df["ax"] / 9.80665
+            if "ay" in df.columns:
+                df["accY_g"] = df["ay"] / 9.80665
+            if "az" in df.columns:
+                df["accZ_g"] = df["az"] / 9.80665
+
+            if "mps.GPS" in df.columns:
+                df["vel_kmph"] = df["mps.GPS"] * 3.6
+
+            if "pqd.drogueN.m" in df.columns:
+                df["p1_data"] = (df["pqd.drogueN.m"] > 0).astype(int)
+            if "pqd.mainN.m" in df.columns:
+                df["p3_data"] = (df["pqd.mainN.m"] > 0).astype(int)
+
+            self.df = df
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Falha ao ler arquivo:\n{e}")
             return
@@ -608,12 +727,8 @@ class StaticAnalysisPage(QWidget):
         return s
 
     def _apply_dtypes(self, df: pd.DataFrame, dtypes: dict) -> pd.DataFrame:
-        for col, dtype in dtypes.items():
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-                # dtype final (float64 etc)
-                if dtype.startswith("float"):
-                    df[col] = df[col].astype("float64")
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
         return df
 
     def _load_csv_novo(self, path: str) -> pd.DataFrame:
@@ -1191,3 +1306,808 @@ class DataSelectionDialog(QDialog):
             "unit_force": self.cmb_force.currentText(),
             "unit_pressure": self.cmb_press.currentText(),
         }
+
+
+class PostProcessingPage(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.file_paths = []
+        self.df_full = None
+        self.df = None
+        self.curves = {}
+        self.gap_regions = []
+        self._build_ui()
+
+    def _build_ui(self):
+        main_layout = QHBoxLayout(self)
+
+        # Painel esquerdo de controle
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(320)
+        scroll.setMaximumWidth(400)
+
+        ctrl_widget = QWidget()
+        ctrl_lay = QVBoxLayout(ctrl_widget)
+
+        # 1. Grupo de Arquivos
+        grp_files = QGroupBox("Arquivos de Telemetria (Reinicio de Voo)")
+        files_lay = QVBoxLayout(grp_files)
+        self.list_widget = QListWidget()
+        self.list_widget.setMinimumHeight(150)
+        files_lay.addWidget(self.list_widget)
+
+        btn_lay1 = QHBoxLayout()
+        self.btn_add = QPushButton("Adicionar")
+        self.btn_remove = QPushButton("Remover")
+        self.btn_clear = QPushButton("Limpar")
+        btn_lay1.addWidget(self.btn_add)
+        btn_lay1.addWidget(self.btn_remove)
+        btn_lay1.addWidget(self.btn_clear)
+        files_lay.addLayout(btn_lay1)
+
+        btn_lay2 = QHBoxLayout()
+        self.btn_up = QPushButton("Subir")
+        self.btn_down = QPushButton("Descer")
+        btn_lay2.addWidget(self.btn_up)
+        btn_lay2.addWidget(self.btn_down)
+        files_lay.addLayout(btn_lay2)
+
+        ctrl_lay.addWidget(grp_files)
+
+        # 2. Grupo de Conexão
+        grp_concat = QGroupBox("Configurações de Conexão")
+        concat_lay = QFormLayout(grp_concat)
+        self.sp_gap = QDoubleSpinBox()
+        self.sp_gap.setRange(0.0, 3600.0)
+        self.sp_gap.setValue(5.0)
+        self.sp_gap.setSuffix(" s")
+        concat_lay.addRow("Intervalo reboot:", self.sp_gap)
+        
+        self.btn_estimate_gap = QPushButton("Estimar Tempo de Reboot")
+        self.btn_concat = QPushButton("Concatenar & Carregar")
+        concat_lay.addRow(self.btn_estimate_gap)
+        concat_lay.addRow(self.btn_concat)
+        ctrl_lay.addWidget(grp_concat)
+
+        # 3. Grupo de Recorte
+        grp_crop = QGroupBox("Ajuste de Recorte (Filtro de Voo)")
+        crop_lay = QFormLayout(grp_crop)
+        self.sp_start = QDoubleSpinBox()
+        self.sp_start.setRange(0.0, 1e7)
+        self.sp_start.setValue(0.0)
+        self.sp_start.setSuffix(" s")
+        crop_lay.addRow("Início do Corte:", self.sp_start)
+
+        self.sp_end = QDoubleSpinBox()
+        self.sp_end.setRange(0.0, 1e7)
+        self.sp_end.setValue(0.0)
+        self.sp_end.setSuffix(" s")
+        crop_lay.addRow("Fim do Corte:", self.sp_end)
+
+        self.btn_auto_detect = QPushButton("Auto-Detectar Voo")
+        self.btn_apply_crop = QPushButton("Aplicar Recorte")
+        self.btn_reset_crop = QPushButton("Restaurar Completo")
+        crop_lay.addRow(self.btn_auto_detect)
+        crop_lay.addRow(self.btn_apply_crop)
+        crop_lay.addRow(self.btn_reset_crop)
+        ctrl_lay.addWidget(grp_crop)
+
+        # 3.5. Grupo de Diagnóstico
+        grp_diag = QGroupBox("Diagnóstico de Telemetria")
+        diag_lay = QVBoxLayout(grp_diag)
+        self.diag_list = QListWidget()
+        self.diag_list.setMinimumHeight(100)
+        self.diag_list.setMaximumHeight(150)
+        diag_lay.addWidget(self.diag_list)
+        self.chk_apply_filters = QCheckBox("Aplicar Filtro de Ruído & Glitches")
+        self.chk_apply_filters.setChecked(False)
+        self.chk_apply_filters.stateChanged.connect(self.plot_data)
+        diag_lay.addWidget(self.chk_apply_filters)
+        ctrl_lay.addWidget(grp_diag)
+
+        # 4. Grupo de Exportação
+        grp_export = QGroupBox("Exportar")
+        export_lay = QVBoxLayout(grp_export)
+        self.btn_export = QPushButton("Salvar Dados Tratados (.txt)")
+        self.btn_export.setStyleSheet("background-color: #7b2cff; color: white; font-weight: bold;")
+        export_lay.addWidget(self.btn_export)
+        ctrl_lay.addWidget(grp_export)
+
+        ctrl_lay.addStretch(1)
+        scroll.setWidget(ctrl_widget)
+        main_layout.addWidget(scroll, stretch=1)
+
+        # Painel direito de plotagem
+        plot_widget = QWidget()
+        plot_lay = QVBoxLayout(plot_widget)
+
+        # Checkboxes de visualização
+        chk_lay = QHBoxLayout()
+        self.chk_alt = QCheckBox("Altitude")
+        self.chk_vel = QCheckBox("Velocidade")
+        self.chk_acc = QCheckBox("Aceleração")
+        self.chk_zero_drift = QCheckBox("Zerar deriva de solo (início/fim em 0m)")
+        self.chk_preview_cropped = QCheckBox("Ver apenas recortado")
+        self.chk_alt.setChecked(True)
+        self.chk_vel.setChecked(True)
+        self.chk_acc.setChecked(True)
+        self.chk_zero_drift.setChecked(True)
+        self.chk_preview_cropped.setChecked(False)
+        
+        self.chk_alt.stateChanged.connect(self.plot_data)
+        self.chk_vel.stateChanged.connect(self.plot_data)
+        self.chk_acc.stateChanged.connect(self.plot_data)
+        self.chk_zero_drift.stateChanged.connect(self.plot_data)
+        self.chk_preview_cropped.stateChanged.connect(self.toggle_preview_cropped)
+
+        chk_lay.addWidget(self.chk_alt)
+        chk_lay.addWidget(self.chk_vel)
+        chk_lay.addWidget(self.chk_acc)
+        chk_lay.addWidget(self.chk_zero_drift)
+        chk_lay.addWidget(self.chk_preview_cropped)
+        chk_lay.addStretch(1)
+        plot_lay.addLayout(chk_lay)
+
+        # Plot
+        self.plot = pg.PlotWidget(title="Visualização e Recorte do Voo")
+        self.plot.addLegend()
+        self.plot.showGrid(x=True, y=True)
+        plot_lay.addWidget(self.plot, stretch=4)
+
+        # Hover Label
+        self.label_hover = QLabel("Cursor: -")
+        plot_lay.addWidget(self.label_hover)
+
+        main_layout.addWidget(plot_widget, stretch=3)
+
+        # Conectar botões
+        self.btn_add.clicked.connect(self._add_files)
+        self.btn_remove.clicked.connect(self._remove_file)
+        self.btn_clear.clicked.connect(self._clear_files)
+        self.btn_up.clicked.connect(self._move_up)
+        self.btn_down.clicked.connect(self._move_down)
+        self.btn_concat.clicked.connect(self.load_and_concatenate)
+        self.btn_estimate_gap.clicked.connect(self.run_reboot_estimation)
+        self.btn_auto_detect.clicked.connect(self.auto_detect_flight)
+        self.btn_apply_crop.clicked.connect(self.apply_crop)
+        self.btn_reset_crop.clicked.connect(self.reset_crop)
+        self.btn_export.clicked.connect(self.export_data)
+
+        # Crosshair e Região
+        self.vLine = pg.InfiniteLine(angle=90, movable=False)
+        self.hLine = pg.InfiniteLine(angle=0, movable=False)
+        self.plot.addItem(self.vLine, ignoreBounds=True)
+        self.plot.addItem(self.hLine, ignoreBounds=True)
+        self.plot.scene().sigMouseMoved.connect(self._mouseMoved)
+
+        self.region = pg.LinearRegionItem()
+        self.region.setZValue(10)
+        self.region.sigRegionChanged.connect(self._update_spinboxes_from_region)
+        self.sp_start.valueChanged.connect(self._update_region_from_spinboxes)
+        self.sp_end.valueChanged.connect(self._update_region_from_spinboxes)
+
+    def _mouseMoved(self, evt):
+        pos = evt
+        if self.plot.sceneBoundingRect().contains(pos):
+            mousePoint = self.plot.plotItem.vb.mapSceneToView(pos)
+            self.vLine.setPos(mousePoint.x())
+            self.hLine.setPos(mousePoint.y())
+            self.label_hover.setText(f"Cursor: t={mousePoint.x():.2f}s, y={mousePoint.y():.2f}")
+
+    def _update_spinboxes_from_region(self):
+        self.sp_start.blockSignals(True)
+        self.sp_end.blockSignals(True)
+        r_min, r_max = self.region.getRegion()
+        self.sp_start.setValue(r_min)
+        self.sp_end.setValue(r_max)
+        self.sp_start.blockSignals(False)
+        self.sp_end.blockSignals(False)
+
+    def _update_region_from_spinboxes(self):
+        self.region.blockSignals(True)
+        self.region.setRegion([self.sp_start.value(), self.sp_end.value()])
+        self.region.blockSignals(False)
+
+    def _add_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Adicionar Arquivos de Voo", "", "Text Files (*.txt)")
+        if not paths:
+            return
+        for p in paths:
+            if p not in self.file_paths:
+                self.file_paths.append(p)
+                self.list_widget.addItem(os.path.basename(p))
+
+    def _remove_file(self):
+        row = self.list_widget.currentRow()
+        if row >= 0:
+            self.list_widget.takeItem(row)
+            self.file_paths.pop(row)
+
+    def _clear_files(self):
+        self.list_widget.clear()
+        self.file_paths.clear()
+
+    def _move_up(self):
+        row = self.list_widget.currentRow()
+        if row > 0:
+            item = self.list_widget.takeItem(row)
+            self.list_widget.insertItem(row - 1, item)
+            self.list_widget.setCurrentRow(row - 1)
+            self.file_paths[row], self.file_paths[row-1] = self.file_paths[row-1], self.file_paths[row]
+
+    def _move_down(self):
+        row = self.list_widget.currentRow()
+        if row < self.list_widget.count() - 1 and row >= 0:
+            item = self.list_widget.takeItem(row)
+            self.list_widget.insertItem(row + 1, item)
+            self.list_widget.setCurrentRow(row + 1)
+            self.file_paths[row], self.file_paths[row+1] = self.file_paths[row+1], self.file_paths[row]
+
+    def _load_single_file(self, path):
+        skiprows = None
+        header_keywords = ["tempo_s", "tempo.s", "time_s", "time"]
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for i in range(5):
+                line = f.readline()
+                if not line:
+                    break
+                line_lower = line.lower()
+                if any(k in line_lower for k in header_keywords):
+                    skiprows = i
+                    break
+
+        if skiprows is not None:
+            df = pd.read_csv(path, sep="\t", skiprows=skiprows, index_col=False, on_bad_lines="skip")
+        else:
+            df = pd.read_csv(path, sep="\t", header=None, index_col=False, on_bad_lines="skip")
+            default_names = [
+                "tempo.s", "mps2.x.accel", "mps2.y.accel", "mps2.z.accel",
+                "dps.x.gyros", "dps.y.gyros", "dps.z.gyros",
+                "uT.x.magn", "uT.y.magn", "uT.z.magn",
+                "c.baro", "pa.baro", "m.h.baro",
+                "lat.GPS", "lon.GPS", "m.h.GPS", "mps.GPS", "sat.GPS", "prec.GPS"
+            ]
+            col_mapping = {i: name for i, name in enumerate(default_names)}
+            df = df.rename(columns=col_mapping)
+
+        df.columns = [str(c).strip() for c in df.columns]
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        mapping = {
+            "tempo.s": "tempo_s",
+            "time_s": "tempo_s",
+            "c.baro": "temp_C",
+            "baro_temp_c": "temp_C",
+            "pa.baro": "pressao_Pa",
+            "baro_press_pa": "pressao_Pa",
+            "m.h.baro": "alt_m",
+            "baro.h.m": "alt_m",
+            "alt_m": "alt_m",
+            "temperatura": "temp_C",
+            "dps.x.gyros": "gyroX_dps",
+            "dps.y.gyros": "gyroY_dps",
+            "dps.z.gyros": "gyroZ_dps",
+            "gx": "gyroX_dps",
+            "gy": "gyroY_dps",
+            "gz": "gyroZ_dps",
+            "uT.x.magn": "magX_uT",
+            "uT.y.magn": "magY_uT",
+            "uT.z.magn": "magZ_uT",
+            "mx": "magX_uT",
+            "my": "magY_uT",
+            "mz": "magZ_uT",
+            "lat.GPS": "lat_deg",
+            "lat_deg": "lat_deg",
+            "lon.GPS": "lon_deg",
+            "lon_deg": "lon_deg",
+            "m.h.GPS": "alt_gps_m",
+            "gps_alt_m": "alt_gps_m",
+            "gps_speed_kmph": "vel_kmph"
+        }
+        df = df.rename(columns=mapping)
+
+        if "mps2.x.accel" in df.columns:
+            df["accX_g"] = df["mps2.x.accel"] / 9.80665
+        if "mps2.y.accel" in df.columns:
+            df["accY_g"] = df["mps2.y.accel"] / 9.80665
+        if "mps2.z.accel" in df.columns:
+            df["accZ_g"] = df["mps2.z.accel"] / 9.80665
+
+        if "ax" in df.columns:
+            df["accX_g"] = df["ax"] / 9.80665
+        if "ay" in df.columns:
+            df["accY_g"] = df["ay"] / 9.80665
+        if "az" in df.columns:
+            df["accZ_g"] = df["az"] / 9.80665
+
+        if "mps.GPS" in df.columns:
+            df["vel_kmph"] = df["mps.GPS"] * 3.6
+
+        if "pqd.drogueN.m" in df.columns:
+            df["p1_data"] = (df["pqd.drogueN.m"] > 0).astype(int)
+        if "pqd.mainN.m" in df.columns:
+            df["p3_data"] = (df["pqd.mainN.m"] > 0).astype(int)
+
+        # Limpar linhas de calibração/inicialização iniciais com leituras zeradas ou espúrias
+        if "pressao_Pa" in df.columns:
+            df = df[df["pressao_Pa"] > 1000.0]
+        elif "baro_press_pa" in df.columns:
+            df = df[df["baro_press_pa"] > 1000.0]
+
+        acc_cols = [c for c in ["accX_g", "accY_g", "accZ_g"] if c in df.columns]
+        if len(acc_cols) == 3:
+            df = df[~((df[acc_cols[0]] == 0.0) & (df[acc_cols[1]] == 0.0) & (df[acc_cols[2]] == 0.0))]
+
+        return df.reset_index(drop=True)
+
+    def load_and_concatenate(self):
+        if not self.file_paths:
+            QMessageBox.warning(self, "Aviso", "Nenhum arquivo adicionado.")
+            return
+
+        try:
+            # Ordena os arquivos alfabeticamente para garantir a ordem cronológica correta
+            self.file_paths.sort(key=os.path.basename)
+            self.list_widget.clear()
+            for p in self.file_paths:
+                self.list_widget.addItem(os.path.basename(p))
+
+            gap = self.sp_gap.value()
+            dfs = []
+            last_time_end = None
+            self.gap_regions = []
+
+            for p in self.file_paths:
+                df = self._load_single_file(p)
+                if df.empty or "tempo_s" not in df.columns:
+                    continue
+
+                df = df.sort_values("tempo_s").reset_index(drop=True)
+
+                if last_time_end is not None:
+                    t0 = df["tempo_s"].iloc[0]
+                    offset = (last_time_end + gap) - t0
+                    df["tempo_s"] = df["tempo_s"] + offset
+                    self.gap_regions.append((last_time_end, last_time_end + gap))
+
+                last_time_end = df["tempo_s"].iloc[-1]
+                dfs.append(df)
+
+            if not dfs:
+                QMessageBox.warning(self, "Aviso", "Nenhum dado válido carregado.")
+                return
+
+            # Encontra a pressão de solo P0 robusta (evitando reboots em voo e glitches)
+            P0 = None
+            pressures = []
+            for df in dfs:
+                if "pressao_Pa" in df.columns:
+                    valid_p = df["pressao_Pa"][(df["pressao_Pa"] >= 50000.0) & (df["pressao_Pa"] <= 110000.0)].dropna()
+                    if not valid_p.empty:
+                        pressures.append(valid_p)
+            
+            if pressures:
+                # Usa o percentil 99 do máximo para evitar picos espúrios isolados de ruído
+                combined_p = pd.concat(pressures)
+                P0 = float(combined_p.quantile(0.99))
+
+            if P0 is not None:
+                for df in dfs:
+                    if "pressao_Pa" in df.columns:
+                        df["alt_m"] = 44330.0 * (1.0 - (df["pressao_Pa"] / P0) ** (1.0 / 5.255))
+            else:
+                # Fallback: Se não há pressão, aplica deslocamento linear de altitude entre arquivos
+                last_alt_end = None
+                for df in dfs:
+                    if last_alt_end is not None and "alt_m" in df.columns:
+                        valid_alt = df["alt_m"].dropna()
+                        if not valid_alt.empty:
+                            alt_offset = last_alt_end - valid_alt.iloc[0]
+                            df["alt_m"] = df["alt_m"] + alt_offset
+                    
+                    if "alt_m" in df.columns:
+                        valid_alt = df["alt_m"].dropna()
+                        if not valid_alt.empty:
+                            last_alt_end = valid_alt.iloc[-1]
+
+            self.df_full = pd.concat(dfs, ignore_index=True)
+            self.df_full = self.df_full.sort_values("tempo_s").reset_index(drop=True)
+            self.df = self.df_full.copy()
+
+            t_min = float(self.df["tempo_s"].min())
+            t_max = float(self.df["tempo_s"].max())
+
+            self.sp_start.setRange(t_min, t_max)
+            self.sp_end.setRange(t_min, t_max)
+            self.sp_start.setValue(t_min)
+            self.sp_end.setValue(t_max)
+            self.region.setRegion([t_min, t_max])
+
+            self.run_diagnostics()
+            self.plot_data()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao concatenar arquivos:\n{e}")
+
+    def run_diagnostics(self):
+        self.diag_list.clear()
+        if self.df_full is None or self.df_full.empty:
+            self.diag_list.addItem("Nenhum dado carregado.")
+            return
+
+        warnings = []
+        
+        # 1. Checa reboots e gaps
+        if len(self.file_paths) >= 2:
+            warnings.append(f"ℹ️ Total de {len(self.file_paths)} arquivos concatenados.")
+            warnings.append(f"ℹ️ Detectadas {len(self.gap_regions)} reinicializações em voo.")
+            for i, (g_start, g_end) in enumerate(self.gap_regions):
+                gap_dur = g_end - g_start
+                warnings.append(f"   • Reboot {i+1}: Gap de ~{gap_dur:.1f} segundos.")
+        
+        # 2. Checa se inicializou no ar (reboot em voo)
+        for i, p in enumerate(self.file_paths):
+            df_temp = self._load_single_file(p)
+            if not df_temp.empty and "pressao_Pa" in df_temp.columns:
+                p_init = df_temp["pressao_Pa"].iloc[0]
+                if p_init < 85000.0:
+                    alt_init = 44330.0 * (1.0 - (p_init / 101325.0) ** (1.0 / 5.255))
+                    warnings.append(f"⚠️ Boot do arquivo {os.path.basename(p)} ocorreu no ar (~{alt_init:.0f}m AGL).")
+                    warnings.append(f"   • Altitude recalibrada com referência de solo robusta.")
+        
+        # 3. Checa deriva de solo
+        if "alt_m" in self.df_full.columns and len(self.df_full) >= 2:
+            t = self.df_full["tempo_s"]
+            alt = self.df_full["alt_m"]
+            h0 = alt.iloc[0]
+            hf = alt.iloc[-1]
+            drift = hf - h0
+            if abs(drift) > 5.0:
+                warnings.append(f"⚠️ Deriva de solo detectada: {drift:+.2f} metros entre início e fim.")
+                warnings.append(f"   • Recomendado: ativar 'Zerar deriva de solo'.")
+
+        # 4. Checa glitches e anomalias físicas
+        acc_cols = [c for c in ["accX_g", "accY_g", "accZ_g"] if c in self.df_full.columns]
+        if len(acc_cols) == 3:
+            acc_mag = np.sqrt(self.df_full[acc_cols[0]]**2 + self.df_full[acc_cols[1]]**2 + self.df_full[acc_cols[2]]**2)
+            spikes_acc = int((acc_mag > 35.0).sum())
+            if spikes_acc > 0:
+                warnings.append(f"⚠️ Detectados {spikes_acc} pontos com aceleração espúria (>35g).")
+                warnings.append(f"   • Ative 'Aplicar Filtro de Ruído & Glitches'.")
+        
+        if "alt_m" in self.df_full.columns:
+            alt_diff = np.abs(np.diff(self.df_full["alt_m"], prepend=self.df_full["alt_m"].iloc[0]))
+            spikes_alt = int((alt_diff > 30.0).sum())
+            if spikes_alt > 0:
+                warnings.append(f"⚠️ Detectados {spikes_alt} glitches de altitude (>30m/amostra).")
+                warnings.append(f"   • Ative 'Aplicar Filtro de Ruído & Glitches'.")
+
+        if not warnings:
+            self.diag_list.addItem("✅ Telemetria saudável! Sem anomalias detectadas.")
+        else:
+            for w in warnings:
+                self.diag_list.addItem(w)
+
+    def apply_telemetry_filters(self, df):
+        if df.empty:
+            return df
+            
+        df_filtered = df.copy()
+        
+        # 1. Filtro de Interpolação para Dropouts (Valores exatamente 0.0)
+        # Evitamos interpolar 'tempo_s'
+        cols_to_interpolate = [c for c in df_filtered.columns if c != "tempo_s"]
+        for c in cols_to_interpolate:
+            if c in ["pressao_Pa", "temp_C"]:
+                # Pressão e temperatura nunca devem ser exatamente zero em voo
+                df_filtered.loc[df_filtered[c] == 0.0, c] = np.nan
+            elif c == "alt_m":
+                # Altitude caindo para 0.0 em pleno voo (fora da pista) é glitch
+                t_start = self.sp_start.value()
+                t_end = self.sp_end.value()
+                df_filtered.loc[(df_filtered["tempo_s"] > t_start) & (df_filtered["tempo_s"] < t_end) & (df_filtered[c] == 0.0), c] = np.nan
+            elif any(k in c.lower() for k in ["acc", "gyro", "mps2", "dps"]):
+                # Aceleração e giroscópios caindo para exatamente 0.0 em voo
+                df_filtered.loc[df_filtered[c] == 0.0, c] = np.nan
+                
+            # Interpola linearmente os NaNs e preenche as bordas
+            if df_filtered[c].isna().any():
+                df_filtered[c] = df_filtered[c].interpolate(method="linear").ffill().bfill()
+        
+        # 2. Filtro de Glitch e Suavização para Altitude (Rolling Median + Rolling Mean)
+        if "alt_m" in df_filtered.columns:
+            df_filtered["alt_m"] = df_filtered["alt_m"].rolling(window=5, min_periods=1, center=True).median()
+            df_filtered["alt_m"] = df_filtered["alt_m"].rolling(window=5, min_periods=1, center=True).mean()
+
+        # 3. Filtro de Glitch para Velocidade
+        if "vel_kmph" in df_filtered.columns:
+            df_filtered["vel_kmph"] = df_filtered["vel_kmph"].rolling(window=5, min_periods=1, center=True).median()
+
+        # 4. Filtro de Glitch para Aceleração
+        acc_cols = ["accX_g", "accY_g", "accZ_g"]
+        if all(c in df_filtered.columns for c in acc_cols):
+            for c in acc_cols:
+                med = df_filtered[c].rolling(window=5, min_periods=1, center=True).median()
+                diff = np.abs(df_filtered[c] - med)
+                df_filtered.loc[diff > 10.0, c] = med
+                df_filtered[c] = df_filtered[c].rolling(window=5, min_periods=1, center=True).mean()
+                
+        return df_filtered
+
+    def run_reboot_estimation(self):
+        if len(self.file_paths) < 2:
+            QMessageBox.warning(self, "Aviso", "São necessários pelo menos 2 arquivos na lista para estimar o tempo de reboot.")
+            return
+
+        try:
+            df1 = self._load_single_file(self.file_paths[0])
+            df2 = self._load_single_file(self.file_paths[1])
+            
+            if df1.empty or df2.empty or "pressao_Pa" not in df1.columns or "tempo_s" not in df1.columns:
+                QMessageBox.warning(self, "Aviso", "Os arquivos não contêm dados de pressão barométrica necessários para a estimativa.")
+                return
+
+            P0 = df1["pressao_Pa"].iloc[0]
+            
+            def calc_alt(P, P0):
+                return 44330.0 * (1.0 - (P / P0)**(1.0/5.255))
+                
+            alt1 = calc_alt(df1["pressao_Pa"], P0)
+            alt2 = calc_alt(df2["pressao_Pa"], P0)
+            
+            alt1_end = alt1.iloc[-1]
+            alt2_start = alt2.iloc[0]
+            alt_delta = alt1_end - alt2_start
+            
+            # Velocidade de descida no fim do primeiro arquivo
+            if len(df1) >= 50:
+                t_seg1 = df1["tempo_s"].iloc[-50:]
+                alt_seg1 = alt1.iloc[-50:]
+            else:
+                t_seg1 = df1["tempo_s"]
+                alt_seg1 = alt1
+            dt1 = t_seg1.iloc[-1] - t_seg1.iloc[0]
+            dalt1 = alt_seg1.iloc[0] - alt_seg1.iloc[-1]
+            vy1 = dalt1 / dt1 if dt1 > 0.01 else 0.0
+
+            # Velocidade de descida no início do segundo arquivo
+            if len(df2) >= 50:
+                t_seg2 = df2["tempo_s"].iloc[:50]
+                alt_seg2 = alt2.iloc[:50]
+            else:
+                t_seg2 = df2["tempo_s"]
+                alt_seg2 = alt2
+            dt2 = t_seg2.iloc[-1] - t_seg2.iloc[0]
+            dalt2 = alt_seg2.iloc[0] - alt_seg2.iloc[-1]
+            vy2 = dalt2 / dt2 if dt2 > 0.01 else 0.0
+
+            vy = None
+            if vy1 > 0.5 and vy2 > 0.5:
+                vy = (vy1 + vy2) / 2.0
+            elif vy1 > 0.5:
+                vy = vy1
+            elif vy2 > 0.5:
+                vy = vy2
+
+            if vy is not None and vy > 0.0:
+                est_gap = alt_delta / vy
+                if 0.1 < est_gap < 120.0:
+                    self.sp_gap.setValue(est_gap)
+                    QMessageBox.information(
+                        self, "Estimativa de Reboot",
+                        f"Tempo de reboot estimado com sucesso baseado na física de queda:\n\n"
+                        f"• Delta Altitude: {alt_delta:.2f} m\n"
+                        f"• Velocidade de descida: {vy:.2f} m/s\n"
+                        f"• Tempo estimado: {est_gap:.2f} s\n\n"
+                        f"O valor foi atualizado nas configurações de conexão."
+                    )
+                    self.load_and_concatenate()
+                    return
+            
+            QMessageBox.warning(
+                self, "Aviso",
+                "Não foi possível estimar o tempo de reboot (o foguete pode não estar em queda estável no momento da falha)."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao realizar estimativa física:\n{e}")
+
+    def toggle_preview_cropped(self):
+        if self.chk_preview_cropped.isChecked():
+            self.region.setVisible(False)
+        else:
+            self.region.setVisible(True)
+        self.plot_data()
+
+    def plot_data(self):
+        self.plot.clear()
+        
+        if not self.chk_preview_cropped.isChecked():
+            self.plot.addItem(self.region)
+            
+        self.plot.addItem(self.vLine, ignoreBounds=True)
+        self.plot.addItem(self.hLine, ignoreBounds=True)
+
+        t_start = self.sp_start.value()
+        t_end = self.sp_end.value()
+
+        # Desenha faixas indicando as áreas onde houve reinicialização (gaps)
+        for g_start, g_end in self.gap_regions:
+            if self.chk_preview_cropped.isChecked():
+                if g_end < t_start or g_start > t_end:
+                    continue
+                display_start = max(t_start, g_start)
+                display_end = min(t_end, g_end)
+            else:
+                display_start = g_start
+                display_end = g_end
+
+            r = pg.LinearRegionItem(values=[display_start, display_end], movable=False,
+                                    brush=pg.mkBrush(255, 165, 0, 50), pen=pg.mkPen(255, 165, 0, 100))
+            self.plot.addItem(r)
+
+        if self.df is None or self.df.empty:
+            return
+
+        # Filtra os dados temporariamente para plotagem se o preview estiver ativado
+        if self.chk_preview_cropped.isChecked():
+            df_plot = self.df[(self.df["tempo_s"] >= t_start) & (self.df["tempo_s"] <= t_end)].copy()
+        else:
+            df_plot = self.df.copy()
+
+        if df_plot.empty:
+            return
+
+        if self.chk_apply_filters.isChecked():
+            df_plot = self.apply_telemetry_filters(df_plot)
+
+        t = df_plot["tempo_s"]
+        alt = df_plot["alt_m"].copy() if "alt_m" in df_plot.columns else None
+
+        # Aplica correção de deriva linear de solo se ativado
+        if alt is not None and self.chk_zero_drift.isChecked() and len(t) >= 2:
+            idx_start = np.abs(df_plot["tempo_s"] - t_start).idxmin()
+            idx_end = np.abs(df_plot["tempo_s"] - t_end).idxmin()
+            
+            h0 = df_plot["alt_m"].loc[idx_start]
+            hf = df_plot["alt_m"].loc[idx_end]
+            
+            corrected_alt = np.zeros_like(alt)
+            mask_flight = (t >= t_start) & (t <= t_end)
+            mask_before = t < t_start
+            mask_after = t > t_end
+            
+            corrected_alt[mask_flight] = alt[mask_flight] - (h0 + ((t[mask_flight] - t_start) / (t_end - t_start)) * (hf - h0))
+            corrected_alt[mask_before] = 0.0
+            corrected_alt[mask_after] = 0.0
+            alt = pd.Series(corrected_alt, index=alt.index)
+
+        if self.chk_alt.isChecked() and alt is not None:
+            self.plot.plot(t.to_numpy(), alt.to_numpy(), pen="b", name="Altitude")
+
+        if self.chk_vel.isChecked() and "vel_kmph" in df_plot.columns:
+            vel_ms = df_plot["vel_kmph"] / 3.6
+            self.plot.plot(t.to_numpy(), vel_ms.to_numpy(), pen="g", name="Velocidade (m/s)")
+
+        if self.chk_acc.isChecked():
+            acc_mag = np.sqrt(df_plot["accX_g"]**2 + df_plot["accY_g"]**2 + df_plot["accZ_g"]**2) if all(c in df_plot.columns for c in ["accX_g","accY_g","accZ_g"]) else np.zeros(len(df_plot))
+            self.plot.plot(t.to_numpy(), np.array(acc_mag), pen="r", name="Aceleração (g)")
+
+        # Ajusta o zoom do eixo X se o preview estiver ativado
+        if self.chk_preview_cropped.isChecked():
+            self.plot.setXRange(t_start, t_end)
+        else:
+            self.plot.getViewBox().enableAutoRange(axis=pg.ViewBox.XAxis)
+
+    def auto_detect_flight(self):
+        if self.df_full is None or self.df_full.empty:
+            QMessageBox.warning(self, "Aviso", "Nenhum dado carregado.")
+            return
+
+        t = self.df_full["tempo_s"]
+        alt = self.df_full["alt_m"].copy() if "alt_m" in self.df_full.columns else pd.Series(np.zeros(len(t)))
+
+        # Filtro de mediana robusto para remover glitches de altimetro antes da detecção
+        alt_smooth = alt.rolling(window=15, min_periods=1, center=True).median()
+
+        # Mediana das primeiras 100 amostras estáveis como altitude de solo base
+        alt_ground = alt_smooth.iloc[:min(100, len(alt_smooth))].median()
+
+        # Decolagem: 15m acima da altitude de solo base
+        launch_indices = np.where(alt_smooth > (alt_ground + 15.0))[0]
+        if len(launch_indices) > 0:
+            idx_start = launch_indices[0]
+        else:
+            idx_start = 0
+
+        idx_apogee = alt_smooth.idxmax()
+
+        # Pouso: retorna a menos de 10m acima da altitude de solo base após apogeu
+        after_apogee = alt_smooth.iloc[idx_apogee:]
+        landing_indices = np.where(after_apogee < (alt_ground + 10.0))[0]
+        if len(landing_indices) > 0:
+            idx_end = idx_apogee + landing_indices[0]
+        else:
+            idx_end = len(self.df_full) - 1
+
+        t_start = max(float(t.min()), float(t.iloc[idx_start]) - 10.0)
+        t_end = min(float(t.max()), float(t.iloc[idx_end]) + 15.0)
+
+        if t_start >= t_end:
+            t_start = float(t.min())
+            t_end = float(t.max())
+
+        self.sp_start.setValue(t_start)
+        self.sp_end.setValue(t_end)
+        self.region.setRegion([t_start, t_end])
+
+    def apply_crop(self):
+        if self.df_full is None:
+            QMessageBox.warning(self, "Aviso", "Nenhum dado carregado.")
+            return
+        t_start = self.sp_start.value()
+        t_end = self.sp_end.value()
+
+        self.df = self.df_full[(self.df_full["tempo_s"] >= t_start) & (self.df_full["tempo_s"] <= t_end)].copy()
+        self.plot_data()
+
+    def reset_crop(self):
+        if self.df_full is None:
+            return
+        self.df = self.df_full.copy()
+
+        t_min = float(self.df["tempo_s"].min())
+        t_max = float(self.df["tempo_s"].max())
+
+        self.sp_start.setValue(t_min)
+        self.sp_end.setValue(t_max)
+        self.region.setRegion([t_min, t_max])
+        self.plot_data()
+
+    def export_data(self):
+        if self.df is None or self.df.empty:
+            QMessageBox.warning(self, "Aviso", "Não há dados para exportar.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar Dados Tratados", "", "Text Files (*.txt)")
+        if not path:
+            return
+
+        try:
+            df_export = self.df.copy()
+            
+            # Se a filtragem de ruído/glitches estiver ativada na tela, exporta com os filtros
+            if self.chk_apply_filters.isChecked():
+                df_export = self.apply_telemetry_filters(df_export)
+
+            if self.chk_zero_drift.isChecked() and "alt_m" in df_export.columns and len(df_export) >= 2:
+                t = df_export["tempo_s"]
+                t_start = self.sp_start.value()
+                t_end = self.sp_end.value()
+                
+                t_start = max(float(t.min()), min(t_start, float(t.max())))
+                t_end = max(t_start + 1.0, min(t_end, float(t.max())))
+                
+                idx_start = np.abs(t - t_start).idxmin()
+                idx_end = np.abs(t - t_end).idxmin()
+                
+                alt = df_export["alt_m"]
+                h0 = alt.loc[idx_start]
+                hf = alt.loc[idx_end]
+                
+                corrected_alt = np.zeros_like(alt)
+                mask_flight = (t >= t_start) & (t <= t_end)
+                mask_before = t < t_start
+                mask_after = t > t_end
+                
+                corrected_alt[mask_flight] = alt[mask_flight] - (h0 + ((t[mask_flight] - t_start) / (t_end - t_start)) * (hf - h0))
+                corrected_alt[mask_before] = 0.0
+                corrected_alt[mask_after] = 0.0
+                df_export["alt_m"] = corrected_alt
+
+            df_export.to_csv(path, sep="\t", index=False)
+            QMessageBox.information(self, "Sucesso", f"Dados exportados com sucesso para:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao exportar arquivo:\n{e}")
+

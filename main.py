@@ -27,119 +27,80 @@ def resource_path(relative_path: str) -> str:
     return os.path.join(BASE_DIR, relative_path)
 
 def get_system_temperature() -> str:
-    os_system = platform.system().lower()
+    # Try psutil sensors_temperatures for any platform
+    try:
+        temps = psutil.sensors_temperatures()
+        if temps:
+            for entries in temps.values():
+                for entry in entries:
+                    if getattr(entry, "current", None) is not None:
+                        return f"{entry.current:.1f}°C"
+    except Exception:
+        pass
 
-    # Linux / Raspberry Pi
-    if os_system == "linux":
-        thermal_path = "/sys/class/thermal/thermal_zone0/temp"
-        if os.path.exists(thermal_path):
-            try:
-                with open(thermal_path, "r", encoding="utf-8") as f:
-                    raw = f.read().strip()
-                temp_c = int(raw) / 1000.0
-                return f"{temp_c:.1f}°C"
-            except Exception:
-                pass
-
+    # Fallback for Linux / Raspberry Pi
+    thermal_path = "/sys/class/thermal/thermal_zone0/temp"
+    if os.path.exists(thermal_path):
         try:
-            temps = psutil.sensors_temperatures()
-            if temps:
-                for entries in temps.values():
-                    for entry in entries:
-                        if getattr(entry, "current", None) is not None:
-                            return f"{entry.current:.1f}°C"
+            with open(thermal_path, "r", encoding="utf-8") as f:
+                raw = f.read().strip()
+            temp_c = int(raw) / 1000.0
+            return f"{temp_c:.1f}°C"
         except Exception:
             pass
-
-        return "N/A"
-
-    # Windows
-    if os_system == "windows":
-        try:
-            temps = psutil.sensors_temperatures()
-            if temps:
-                for entries in temps.values():
-                    for entry in entries:
-                        if getattr(entry, "current", None) is not None:
-                            return f"{entry.current:.1f}°C"
-        except Exception:
-            pass
-
-        return "N/A"
 
     return "N/A"
 
 
 def get_system_secondary_info() -> str:
-    os_system = platform.system().lower()
-
-    # Windows -> bateria
-    if os_system == "windows":
-        try:
-            batt = psutil.sensors_battery()
-            if batt is not None:
-                return f"Bat: {batt.percent:.0f}%"
-        except Exception:
-            pass
-        return "Bat: N/A"
-
-    # Linux / Raspberry -> RAM
-    if os_system == "linux":
-        try:
-            ram = psutil.virtual_memory()
-            return f"RAM: {ram.percent:.0f}%"
-        except Exception:
-            pass
-        return "RAM: N/A"
-
-    return "N/A"
-
-def play_startup_chime():
-    import platform
-    import time
-
-    os_system = platform.system().lower()
-
+    info = []
     try:
-        if os_system == "windows":
-            import winsound
-
-            notes = [
-                (780, 30),
-                (1040, 45),
-            ]
-
-            for freq, dur in notes:
-                winsound.Beep(freq, dur)
-
-        elif os_system == "linux":
-            from gpiozero import Buzzer
-
-            buzzer = None
-            try:
-                buzzer = Buzzer(6)
-
-                steps = [70, 55, 40, 30]
-                for ms in steps:
-                    buzzer.on()
-                    time.sleep(ms / 1000.0)
-                    buzzer.off()
-                    time.sleep(0.015)
-
-            finally:
-                if buzzer is not None:
-                    try:
-                        buzzer.off()
-                    except Exception:
-                        pass
-                    try:
-                        buzzer.close()
-                    except Exception:
-                        pass
-
+        ram = psutil.virtual_memory()
+        info.append(f"RAM: {ram.percent:.0f}%")
     except Exception:
         pass
-    
+
+    try:
+        batt = psutil.sensors_battery()
+        if batt is not None:
+            info.append(f"Bat: {batt.percent:.0f}%")
+    except Exception:
+        pass
+
+    return " | ".join(info) if info else "N/A"
+
+def play_startup_chime():
+    import time
+
+    try:
+        # Try winsound first (Windows)
+        import winsound
+        notes = [
+            (780, 30),
+            (1040, 45),
+        ]
+        for freq, dur in notes:
+            winsound.Beep(freq, dur)
+        return
+    except ImportError:
+        pass
+
+    try:
+        # Try gpiozero (Linux / Raspberry Pi GPIO)
+        from gpiozero import Buzzer
+        buzzer = Buzzer(6)
+        try:
+            steps = [70, 55, 40, 30]
+            for ms in steps:
+                buzzer.on()
+                time.sleep(ms / 1000.0)
+                buzzer.off()
+                time.sleep(0.015)
+        finally:
+            buzzer.close()
+    except Exception:
+        pass
+
 def wrap_in_scroll(widget: QWidget) -> QWidget:
     page = QWidget()
     outer = QVBoxLayout(page)
@@ -825,11 +786,7 @@ def main():
 
     win = MainWindow()
 
-    if sys.platform.startswith("linux"):
-        win.setWindowFlags(Qt.FramelessWindowHint)
-        win.showFullScreen()
-    else:
-        win.showMaximized()
+    win.showMaximized()
 
     # QTimer.singleShot(250, play_startup_chime)
     

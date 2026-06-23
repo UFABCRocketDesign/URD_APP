@@ -1,13 +1,25 @@
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter, QLabel,
-    QPushButton, QPlainTextEdit, QGroupBox, QComboBox,
-    QMessageBox, QFileDialog, QInputDialog
-)
-from PySide6.QtCore import Qt, QTimer
-import pyqtgraph as pg
-import serial, time
-import serial.tools.list_ports
+import platform
+import time
 
+import pyqtgraph as pg
+import serial
+import serial.tools.list_ports
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFileDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
 from views.logger import Logger
 
 
@@ -22,8 +34,8 @@ class GSTestEstaticoPage(QWidget):
         self.timer_serial.timeout.connect(self._read_serial)
         self.connected_ok = False
 
-         # ignição
-        self.ignition_state = 0          # 0 = neutro, 1 = armado, 2 = ignição
+        # ignição
+        self.ignition_state = 0  # 0 = neutro, 1 = armado, 2 = ignição
         self.blink_timer = QTimer()
         self.blink_timer.timeout.connect(self.toggle_blink)
         self.is_blink_on = False
@@ -34,7 +46,6 @@ class GSTestEstaticoPage(QWidget):
         self.data_pressao = []
         self.max_thrust_val = 0.0
         self.max_pressure_val = 0.0
-
 
         self._build_ui()
 
@@ -67,32 +78,31 @@ class GSTestEstaticoPage(QWidget):
 
         # curvas
         self.curva_empuxo = self.plot.plot(
-            pen=pg.mkPen('purple', width=2), name="Empuxo (kgf)"
+            pen=pg.mkPen("purple", width=2), name="Empuxo (kgf)"
         )
         self.curva_pressao = pg.PlotCurveItem(
-            pen=pg.mkPen('green', width=2), name="Pressão (psi)"
+            pen=pg.mkPen("green", width=2), name="Pressão (psi)"
         )
         self.pressure_axis.addItem(self.curva_pressao)
 
         # legenda manual
         self.legend = pg.LegendItem(offset=(50, 30))
         self.legend.setParentItem(self.plot.graphicsItem())
-        self.legend.addItem(self.curva_empuxo, "<span style='color:purple;'>Empuxo (kgf)</span>")
-        self.legend.addItem(self.curva_pressao, "<span style='color:green;'>Pressão (psi)</span>")
+        self.legend.addItem(
+            self.curva_empuxo, "<span style='color:purple;'>Empuxo (kgf)</span>"
+        )
+        self.legend.addItem(
+            self.curva_pressao, "<span style='color:green;'>Pressão (psi)</span>"
+        )
 
         # sincroniza os eixos
         self.plot.getViewBox().sigResized.connect(self.update_views)
 
         main_splitter.addWidget(self.plot)
 
-
-
         # --- parte inferior: splitter horizontal ---
         bottom_splitter = QSplitter(Qt.Horizontal)
         main_splitter.addWidget(bottom_splitter)
-
-
-  
 
         # terminal (esquerda)
         self.terminal = QPlainTextEdit()
@@ -164,11 +174,10 @@ class GSTestEstaticoPage(QWidget):
         self.btn_ping.clicked.connect(self.send_ping)
         grid.addWidget(self.btn_ping, 4, 0, 1, 2)
 
-
         right_split.addWidget(data_box)
 
-        main_splitter.setSizes([600, 400])        # gráfico maior
-        bottom_splitter.setSizes([700, 300])      # terminal > painel direito
+        main_splitter.setSizes([600, 400])  # gráfico maior
+        bottom_splitter.setSizes([700, 300])  # terminal > painel direito
 
         # comportamento ao redimensionar
         main_splitter.setStretchFactor(0, 3)
@@ -181,13 +190,16 @@ class GSTestEstaticoPage(QWidget):
         self.btn_disconnect.clicked.connect(self.disconnect_serial)
         self.btn_clear.clicked.connect(self._clear_terminal)
         self.combo_ports.mousePressEvent = lambda ev: (
-            self.refresh_ports(), QComboBox.mousePressEvent(self.combo_ports, ev)
+            self.refresh_ports(),
+            QComboBox.mousePressEvent(self.combo_ports, ev),
         )
 
     def update_views(self):
-    # Mantém o eixo da pressão alinhado com o eixo principal
+        # Mantém o eixo da pressão alinhado com o eixo principal
         self.pressure_axis.setGeometry(self.plot.getViewBox().sceneBoundingRect())
-        self.pressure_axis.linkedViewChanged(self.plot.getViewBox(), self.pressure_axis.XAxis)
+        self.pressure_axis.linkedViewChanged(
+            self.plot.getViewBox(), self.pressure_axis.XAxis
+        )
 
     def send_ping(self):
         if self.ser and self.ser.is_open and self.connected_ok:
@@ -199,16 +211,14 @@ class GSTestEstaticoPage(QWidget):
             except Exception as e:
                 self.terminal.appendPlainText(f"[ERRO] Falha ao enviar PING: {e}")
         else:
-            QMessageBox.information(self, "Ping", "Nenhuma conexão ativa com o microcontrolador.")
-
+            QMessageBox.information(
+                self, "Ping", "Nenhuma conexão ativa com o microcontrolador."
+            )
 
     # ---------------- Serial ----------------
     def refresh_ports(self):
         self.combo_ports.clear()
         for port in serial.tools.list_ports.comports():
-            desc = port.description.lower()
-            if "bluetooth" in desc:
-                continue
             self.combo_ports.addItem(port.device)
         if self.combo_ports.count() == 0:
             self.combo_ports.addItem("")
@@ -221,7 +231,9 @@ class GSTestEstaticoPage(QWidget):
             return
         try:
             if self.connected_ok:
-                QMessageBox.information(self, "Conexão", f"Já está conectado em {self.ser.port}")
+                QMessageBox.information(
+                    self, "Conexão", f"Já está conectado em {self.ser.port}"
+                )
                 return
             self.ser = serial.Serial(port, 115200, timeout=0.2)
             self.timer_serial.start(50)
@@ -269,11 +281,11 @@ class GSTestEstaticoPage(QWidget):
                     if line == "PONG1":
                         self.cont_led.setStyleSheet("color: green; font-size: 32px;")
                     return
-                
+
                 if self.logger:
                     self.logger.save_line(line)  # salva a linha inteira no arquivo
 
-                 # Se recebeu o cabeçalho, só ignora
+                # Se recebeu o cabeçalho, só ignora
                 if line.startswith("Tempo"):
                     return
 
@@ -287,7 +299,6 @@ class GSTestEstaticoPage(QWidget):
                         avgTransd = float(parts[3])
                         avgPSI = float(parts[4])
 
-            
                         # Atualiza arrays
                         self.data_tempo.append(tempo)
                         self.data_empuxo.append(avgKgf)
@@ -304,13 +315,18 @@ class GSTestEstaticoPage(QWidget):
 
                         if avgPSI > self.max_pressure_val:
                             self.max_pressure_val = avgPSI
-                            self.max_pressure.setText(f"{self.max_pressure_val:.2f} psi")
-
+                            self.max_pressure.setText(
+                                f"{self.max_pressure_val:.2f} psi"
+                            )
 
                     except ValueError:
                         print(f"[WARN] Linha inválida: {line}")
             except Exception as e:
-                QMessageBox.critical(self, "Erro", f"A porta {self.ser.port} foi desconectada.\nErro: {e}")
+                QMessageBox.critical(
+                    self,
+                    "Erro",
+                    f"A porta {self.ser.port} foi desconectada.\nErro: {e}",
+                )
                 self._set_status("Desconectado", "#666")
                 self.timer_serial.stop()
                 if self.ser:
@@ -342,8 +358,6 @@ class GSTestEstaticoPage(QWidget):
         self.max_thrust.setText("0.0 kgf")
         self.max_pressure.setText("0.0 psi")
 
-
-
     def _set_status(self, msg: str, color: str = "#666"):
         self.lbl_status.setText(msg)
         self.lbl_status.setStyleSheet(f"color:{color}; font-weight:500;")
@@ -353,11 +367,15 @@ class GSTestEstaticoPage(QWidget):
         now = time.time()
 
         if self.ignition_state == 0:  # neutro → tentar armar
-            senha, ok = QInputDialog.getText(self, "Senha", "Digite a senha de ignição:")
+            senha, ok = QInputDialog.getText(
+                self, "Senha", "Digite a senha de ignição:"
+            )
             if ok and senha == "urd123":
                 self.ignition_state = 1
                 self.ignition_btn.setText("Armado")
-                self.ignition_btn.setStyleSheet("background-color: orange; color:black;")
+                self.ignition_btn.setStyleSheet(
+                    "background-color: orange; color:black;"
+                )
                 self.terminal.appendPlainText("[IGNIÇÃO] ARMADO enviado.")
                 if self.ser and self.ser.is_open and self.connected_ok:
                     self.ser.write(b"ARMED!\n")
@@ -401,11 +419,12 @@ class GSTestEstaticoPage(QWidget):
     def toggle_blink(self):
         if self.ignition_state == 1:  # só pisca quando está armado
             if self.is_blink_on:
-                self.ignition_btn.setStyleSheet("background-color: orange; color:black;")
+                self.ignition_btn.setStyleSheet(
+                    "background-color: orange; color:black;"
+                )
             else:
                 self.ignition_btn.setStyleSheet("background-color: red; color:white;")
             self.is_blink_on = not self.is_blink_on
-
 
     # ---------------- Logger ----------------
     def ask_logger(self):
@@ -413,14 +432,14 @@ class GSTestEstaticoPage(QWidget):
             self,
             "Salvar Dados?",
             "Deseja salvar os dados desta sessão em arquivo?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
             filename, _ = QFileDialog.getSaveFileName(
                 self,
                 "Escolher local para salvar log",
                 f"TElog_{time.strftime('%Y%m%d_%H%M%S')}.txt",
-                "Text Files (*.txt)"
+                "Text Files (*.txt)",
             )
             if filename:
                 self.logger = Logger(filename)

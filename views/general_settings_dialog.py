@@ -29,7 +29,6 @@ class GeneralSettingsDialog(QDialog):
     def _build_ui(self):
         root = QVBoxLayout(self)
 
-        self.is_linux = platform.system().lower() == "linux"
 
         # --- Rede ---
         box_net = QGroupBox("Rede")
@@ -62,13 +61,11 @@ class GeneralSettingsDialog(QDialog):
         self.btn_quit = QPushButton("Encerrar aplicativo")
         lay_actions.addWidget(self.btn_quit)
 
-        self.btn_shutdown = QPushButton("Desligar Raspberry Pi (shutdown)")
+        self.btn_shutdown = QPushButton("Desligar computador (shutdown)")
         lay_actions.addWidget(self.btn_shutdown)
 
         root.addWidget(box_actions)
         root.addStretch(1)
-
-        self.btn_shutdown.setVisible(self.is_linux)
 
         # sinais
         self.chk_force_offline.toggled.connect(self._on_force_offline_toggled)
@@ -132,16 +129,22 @@ class GeneralSettingsDialog(QDialog):
         ok = QMessageBox.question(
             self,
             "Shutdown",
-            "Deseja desligar o Raspberry Pi agora?\n\nIsso vai encerrar o sistema.",
+            "Deseja desligar o computador agora?\n\nIsso vai encerrar o sistema.",
             QMessageBox.Yes | QMessageBox.No
         )
         if ok != QMessageBox.Yes:
             return
 
-        cmds = [
-            ["systemctl", "poweroff"],
-            ["shutdown", "-h", "now"],
-        ]
+        os_system = platform.system().lower()
+        if os_system == "windows":
+            cmds = [
+                ["shutdown", "/s", "/t", "0"],
+            ]
+        else:
+            cmds = [
+                ["systemctl", "poweroff"],
+                ["shutdown", "-h", "now"],
+            ]
 
         last_err = None
         for cmd in cmds:
@@ -154,6 +157,5 @@ class GeneralSettingsDialog(QDialog):
         QMessageBox.critical(
             self,
             "Falha no shutdown",
-            f"Não foi possível desligar automaticamente.\n\nErro: {last_err}\n\n"
-            "Dica: pode precisar rodar com permissão (sudo/polkit)."
+            f"Não foi possível desligar automaticamente.\n\nErro: {last_err}"
         )
